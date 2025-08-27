@@ -1,6 +1,6 @@
 TTT stands for Trivial Tangle Traverser. This tool generates "not terrible" traversals through repetitive genomic tangles that somehow matches coverage and the read alignment.
 
-For help run ./TTT.py --help
+For help run `./TTT.py --help`
 
 Requires python &ge; 3.7 and dataclasses, pulp, ahocorasick, networkx, statistics, and logging python libraries.
 
