@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from platform import node
 import sys
 import os
 import argparse
@@ -20,15 +21,8 @@ def rc_node(node):
     """RC nodes stored as negative"""
     return -node
 
-def parse_gfa(file_path, node_mapper):
-    """
-    Parse a GFA file and construct a directed graph using networkx.DiGraph.
-    Nodes are stored as integers (positive for '+' orientation, negative for '-' orientation).
+def parse_gfa(file_path, node_mapper) -> nx.DiGraph:
     
-    :param file_path: Path to the GFA file
-    :param node_mapper: NodeIdMapper instance
-    :return: networkx.DiGraph representing the graph
-    """
     original_graph = nx.DiGraph()
 
     with open(file_path, 'r') as gfa_file:
@@ -118,6 +112,17 @@ def parse_gfa(file_path, node_mapper):
     logging.info(f"Tuned non-transitive junctions: {non_transitive_junctions}")
     return original_graph
 
+def get_nonoriented_graph(directed_graph:nx.DiGraph) -> nx.Graph:
+    #no negative ids
+    res = nx.Graph()
+    for node in directed_graph.nodes():
+        if node < 0:
+            continue
+        res.add_node(node, **directed_graph.nodes[node])
+    for u, v in directed_graph.edges():
+       res.add_edge(abs(u), abs(v), mid_length = directed_graph.nodes[u].get('length', 0) + directed_graph.nodes[v].get('length', 0))
+    return res
+
 def parse_gaf(gaf_file, interesting_nodes, filtered_file, quality_threshold, node_mapper):
     res = []
     if filtered_file:
@@ -203,7 +208,7 @@ def clean_tips(tangle_nodes, directed_graph, node_mapper):
             tangle_nodes.remove(n)
             directed_graph.remove_node(n)
 
-def read_tangle_nodes(args, original_graph, node_mapper):
+def read_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMapper):
     """Read or construct tangle nodes."""
     if args.tangle_file:
         tangle_nodes = set()
@@ -230,7 +235,7 @@ def read_tangle_nodes(args, original_graph, node_mapper):
 
     return tangle_nodes
 
-def read_coverage_file(coverage_file, node_mapper):
+def read_coverage_file(coverage_file, node_mapper:NodeIdMapper):
     """node_id\tnode_cov"""
     logging.info(f"Reading coverage from {coverage_file}")
 
@@ -256,7 +261,7 @@ def coverage_from_graph(assembly_graph):
             exit()
     return cov
 
-def verify_coverage(cov, original_graph, node_mapper):
+def verify_coverage(cov, original_graph:nx.DiGraph, node_mapper:NodeIdMapper):
     graph_nodes = set(original_graph.nodes())
     for node_id in cov.keys():
         if abs(node_id) not in graph_nodes:
@@ -295,11 +300,11 @@ def verify_coverage(cov, original_graph, node_mapper):
             if node_id not in cov:
                 cov[node_id] = estimated_unique_coverage
 
-def is_forward_unique(oriented_node, original_graph):
+def is_forward_unique(oriented_node, original_graph:nx.DiGraph):
     """Checks if an oriented node has exactly one outgoing edge."""
     return len(list(original_graph.successors(oriented_node))) == 1
 
-def calculate_median_unique_coverage(nor_nodes, original_graph, cov, min_b, node_mapper):
+def calculate_median_unique_coverage(nor_nodes, original_graph:nx.DiGraph, cov, min_b, node_mapper:NodeIdMapper):
     """
     Calculates the median coverage of nodes in nor_nodes that are structurally unique.
     A node is structurally unique if both its '+' and '-' orientations satisfy
@@ -352,13 +357,16 @@ def calculate_median_unique_coverage(nor_nodes, original_graph, cov, min_b, node
     logging.debug(f"Unique coverages: {unique_coverages}")
     return median_cov
 
-def calculate_median_coverage(args, nor_nodes, original_graph, cov, boundary_nodes, node_mapper):
+def calculate_median_coverage(args, nor_nodes, original_graph:nx.DiGraph, cov, boundary_nodes, node_mapper:NodeIdMapper):
     """Calculate or use provided median unique coverage."""
     min_b = 1000000
     all_boundary = list(boundary_nodes.keys()) + list(boundary_nodes.values())
-    for b in all_boundary:
-        logging.info (f"{node_mapper.node_id_to_name_safe(b)} {cov[abs(b)]}")
-        min_b = min(min_b, cov[abs(b)])
+
+    for source, sink in boundary_nodes.items():
+        logging.info (f"Source: {node_mapper.node_id_to_name_safe(source)} coverage {cov[abs(source)]}")
+        logging.info (f"Sink: {node_mapper.node_id_to_name_safe(sink)} coverage {cov[abs(sink)]}")
+        min_b = min(min_b, cov[abs(source)])
+        min_b = min(min_b, cov[abs(sink)])
     if args.median_unique is not None:
         return [args.median_unique/GIVEN_MEDIAN_COVERAGE_VARIATION, args.median_unique * GIVEN_MEDIAN_COVERAGE_VARIATION]
     calculated_median = calculate_median_unique_coverage(nor_nodes, original_graph, cov, min_b, node_mapper)
@@ -369,49 +377,82 @@ def calculate_median_coverage(args, nor_nodes, original_graph, cov, boundary_nod
         logging.warning(f"Failed to calculate median unique coverage for tangle. Using coverage based on neighbours {res} but better provide it manually with--median-unique.")
         return res
 
-def identify_boundary_nodes(args, original_graph, tangle_nodes, node_mapper):
-    if args.boundary_nodes:
-        boundary_nodes = {}
-        for line in open(args.boundary_nodes):
-            # Parse the line and extract boundary node pairs
-            # map incoming->matching outgoing
-            parts = line.strip().split()
-            if len(parts) == 2:
-                node1 = node_mapper.parse_node_id(parts[0])
-                is_incoming = False
-                for next_node in original_graph.successors(node1):
-                    if next_node in tangle_nodes:
-                        is_incoming = True
-                        break
-                if not is_incoming:
-                    node1 = -node1
-                node2 = node_mapper.parse_node_id(parts[1])
-                is_outgoing = False
-                for prev in original_graph.predecessors(node2):
-                    if prev in tangle_nodes:
-                        is_outgoing = True
-                        break
-                if not is_outgoing:
-                    node2 = -node2
-                boundary_nodes[node1] = node2
-        return boundary_nodes
-    else:
-        out_boundary_nodes = set()
-        in_boundary_nodes = set()
-        for first in original_graph.nodes:
-            for second in original_graph.successors(first):
-                if first in tangle_nodes and second not in tangle_nodes:
-                    out_boundary_nodes.add(second)
-                elif second in tangle_nodes and first not in tangle_nodes:
-                    in_boundary_nodes.add(first)
-        log_assert(len(out_boundary_nodes) == 2 and len(in_boundary_nodes) == 2, 
-                    f"Autodetection works only for 1-1 tangles, detected out_boundary: {[node_mapper.node_id_to_name_safe(n) for n in out_boundary_nodes]}, in_boundary: {[node_mapper.node_id_to_name_safe(n) for n in in_boundary_nodes]}. Specify boundary node pairs manually")
-        res = {}
-        start = max(in_boundary_nodes)
-        end = max(out_boundary_nodes)
-        log_assert(abs(start) != abs(end), 
-                    f"Start and end boundary nodes should be different, got {node_mapper.node_id_to_name_safe(start)} and {node_mapper.node_id_to_name_safe(end)}")
-        res[start] = end
-        return res
+def identify_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMapper):
+    boundary = []
+    for line in open(args.boundary_nodes):
+        # Parse the line and extract boundary node pairs
+        # map incoming->matching outgoing
+        parts = line.strip().split()
+        if len(parts) == 0:
+            continue
+        log_assert(len(parts) == 2, f"Expected 2 nodes per line in boundary nodes file, got {len(parts)} in line: {line.strip()}")
+        if len(parts) == 2:
+            node1 = node_mapper.parse_node_id(parts[0])
+            node2 = node_mapper.parse_node_id(parts[1])
+            log_assert(node1 in original_graph.nodes(), f"Boundary node {node_mapper.node_id_to_name_safe(node1)} not found in the provided graph {args.graph} ")
+            log_assert(node2 in original_graph.nodes(), f"Boundary node {node_mapper.node_id_to_name_safe(node2)} not found in the provided graph {args.graph} ")
+            boundary.append([node1, node2])
+    log_assert(len(boundary) >=1 and len(boundary) <= 2, f"Expected 1 or 2 pairs of boundary nodes, got {len(boundary)}")
+
+    indirect_graph = get_nonoriented_graph(original_graph)
+    source_name = node_mapper.node_id_to_name_safe(boundary[0][0])
+    sink_name = node_mapper.node_id_to_name_safe(boundary[0][1])
+    distance, path = nx.single_source_dijkstra(indirect_graph, boundary[0][0], boundary[0][1], weight='mid_length')
+    log_assert(len(path) > 2, f"Expected path length > 2, got {len(path)} nodes in shortest path between {source_name} and {sink_name}")
+    #TODO: weird case where incoming and outgoing are neighbours in graph
+    logging.info(f"Unoriented distance between boundary nodes {source_name} and {sink_name}: {distance//2}, path length: {len(path)}")
+    inside_node = path[1]
+    original_component = nx.node_connected_component(indirect_graph, inside_node)
+    for boundary_pair in boundary:
+        for boundary_node in boundary_pair:
+            indirect_graph.remove_node(boundary_node)
+    tangle_component = nx.node_connected_component(indirect_graph, inside_node)
+    if len(tangle_component) + len(boundary) * 2 >= len(original_component):
+        logging.warning(f"Boundary nodes do not isolate tangle from the rest of the component!!!")
+    logging.info (f"Original component size: {len(original_component)} nodes, Tangle size: {len(tangle_component)}")
+    tangle_nodes = set()
+    for node in tangle_component:
+        tangle_nodes.add(node)
+        tangle_nodes.add(rc_node(node))
+    boundary_map = {}
+    for i in range(len(boundary)):
+        node1 = boundary[i][0]
+        is_incoming = False
+        for next_node in original_graph.successors(node1):
+            if next_node in tangle_nodes:
+                is_incoming = True
+                break
+        if not is_incoming:
+            node1 = -node1
+        node2 = boundary[i][1]
+        is_outgoing = False
+        for prev in original_graph.predecessors(node2):
+            if prev in tangle_nodes:
+                is_outgoing = True
+                break
+        if not is_outgoing:
+            node2 = -node2  
+        boundary_map[node1] = node2
+    return tangle_nodes, boundary_map
+
+
+def get_oriented_boundaries(args, original_graph:nx.DiGraph, tangle_nodes, node_mapper:NodeIdMapper):
+    out_boundary_nodes = set()
+    in_boundary_nodes = set()
+    for first in original_graph.nodes:
+        for second in original_graph.successors(first):
+            if first in tangle_nodes and second not in tangle_nodes:
+                out_boundary_nodes.add(second)
+            elif second in tangle_nodes and first not in tangle_nodes:
+                in_boundary_nodes.add(first)
+    log_assert(len(out_boundary_nodes) == 2 and len(in_boundary_nodes) == 2, 
+                f"Autodetection works only for 1-1 tangles, detected out_boundary: {[node_mapper.node_id_to_name_safe(n) for n in out_boundary_nodes]}, in_boundary: {[node_mapper.node_id_to_name_safe(n) for n in in_boundary_nodes]}. Specify boundary node pairs manually")
+    res = {}
+    start = max(in_boundary_nodes)
+    end = max(out_boundary_nodes)
+    log_assert(abs(start) != abs(end), 
+                f"Start and end boundary nodes should be different, got {node_mapper.node_id_to_name_safe(start)} and {node_mapper.node_id_to_name_safe(end)}")
+    res[start] = end
+    return res
 
 
