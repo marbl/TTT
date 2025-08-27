@@ -8,13 +8,14 @@ Requires python &ge; 3.7 and dataclasses, pulp, ahocorasick, networkx, statistic
 
 UNDER CONSTRUCTION!
 
-## Usage
-
+### Example usage:
 ```bash
-./TTT.py --gfa <gfa_file> --alignment <alignment_file> --output <output_directory> [options]
+./TTT.py --graph assembly.gfa --alignment reads.gaf --output results_dir --boundary-nodes boundary_nodes.tsv --quality-threshold 20
 ```
+
 <details>
-<summary><b>Will TTT help with this gap in my scaffold?</b></summary>
+ <br /> 
+<summary><b>Will TTT help with a gap in my scaffold?</b></summary>
 
  
 Generally there are three main reasons for gaps in a scaffold:
@@ -35,13 +36,13 @@ Generally there are three main reasons for gaps in a scaffold:
   <p>
   <img width="400" height="400" alt="diploid_simple_tangle" src="https://github.com/user-attachments/assets/650052c6-5f53-43fa-bdfa-464c8a5d6fdb" />
     
-  <em> Scaffolds &lt;utig4-1225&lt;utig4-1224[N5000N:ambig_bubble]&gt;utig4-1511&lt;utig4-1513 and &lt;utig4-1226&lt;utig4-1224[N5000N:ambig_bubble]&gt;utig4-1511&lt;utig4-1512. Because of long homozygous nodes utig4-1224 and utig4-1511 there's just no long reads connecting utig4-1228/utig4-1227 with utig4-1225/utig4-1226 or utig4-1512/utig4-1513 </em>
+  <em> Scaffolds &lt;utig4-1225&lt;utig4-1224[N5000N:ambig_bubble]&gt;utig4-1511&lt;utig4-1513 and &lt;utig4-1226&lt;utig4-1224[N5000N:ambig_bubble]&gt;utig4-1511&lt;utig4-1512. Because of long homozygous nodes utig4-1224 and utig4-1511 there's just no long reads connecting utig4-1228/utig4-1227 with utig4-1225/utig4-1226 or utig4-1512/utig4-1513. TTT will make a random guess, but so can you </em>
 </p>
 
 * Complex repeats
   
-  TTT was designed for such cases. However, there are still limitations --- there can be no more than 2 haplotypes in the tangle (so rDNA tangles connecting multiple chromosomes are usually unresolvable), and for two tangle cases you should provide pairs of in- and out- nodes for each of the haplotypes.
-
+  TTT was designed for such cases. However there can be no more than 2 haplotypes in the tangle (so rDNA tangles connecting multiple chromosomes are usually unresolvable).
+  Also TTT does not scaffold so you need to know how to pair incoming and outgoing nodes for two haplotype cases.
   <p>
   <img width="400" height="400" alt="haploid tangle" src="https://github.com/user-attachments/assets/6df23394-811a-49a7-8606-993d2b8f1e89" />  
 
@@ -51,41 +52,33 @@ Generally there are three main reasons for gaps in a scaffold:
   <p>
   <img width="400" height="400" alt="diploid tangle" src="https://github.com/user-attachments/assets/fc8418dd-1391-4032-ac62-0f9881c9a08c" />
   
-  <em>Gap caused by large duplication of homozygous region, present inonly  one of the haplotypes</em>
+  <em>Gap caused by large duplication of homozygous region, present in one of the haplotypes</em>
   </p>
 
 </details>
 
 ### Required Arguments:
-- `--gfa`: Path to the GFA file with the graph structure
+- `--graph`: Path to the GFA file with the graph structure
 - `--alignment`: Path to a file with GraphAligner alignment
 
-OR
+Instead of those two options one can use `--verkko-output <verkko output directory>` . In this case internal verkko files for HiFi graph, coverage (ONT) and ONT alignments would be used.
 
-- `--verkko-output` - HiFi graph ,coverage (ONT) and ONT alignments from verkko would be used.
+- `--outdir` Output directory
 
-- Tangle should be specified with either one internal node (`--tangle-node utig4-267`) or a file with complete list of internal tangle nodes one by line (`--tangle-file nodes.list`)
-- `--output`: Output directory for all result files (will be created if it doesn't exist)
+- `--boundary-nodes <boundary_nodes_file>` to locate tangle. 
+`boundary_nodes_file` should contain tab separated pairs of incoming and outgoing boundary nodes, one pair by line. 
+Boundary nodes should completely separate the tangle from the rest of the graph --- after their removal there should be no path between tangle nodes and any remaining non-tangle nodes. Also they should be non-repetive and heterozygous in case of 'diploid' tangles. Currently TTT does not support tangles with more than 2 traversing paths (i.e. most of the rDNA tangles in human-like genomes)
+<details>
+<summary>Example</summary>
+<img width="903" height="895" alt="helo_border" src="https://github.com/user-attachments/assets/693575f7-4bd4-44f0-8774-bc78fbf98224" />
 
-Be sure that you use the same graph for all the files (gfa, alignment, coverage, tangle and border nodes) -  HiFi graph (or --verkko-output) will not work with tangle nodes provided with respect to the final ONT resolved (utig4- in verkko case) graph.
-
-Tangle traversal does no scaffolding. So, when running on tangles with two genomic paths you should provide incoming and outgoing boundary node pairs with --boundary-nodes boundary_file.tsv
-
-File should be tab separated, in format:
-
-`incoming_hap1_node  outgoing_hap1_node`
-
-`incoming_hap2_node  outgoing_hap2_node`
-
-Tangle_traverer does not support tangles with more than 2 traversing paths (i.e. most of the rDNA tangles)
-
-
-
-### Example:
-```bash
-./tangle_traverser.py --gfa assembly.gfa --alignment reads.gaf --output results_dir --tangle-node utig4-267 --quality-threshold 20
-```
-
+For this tangle decent choice of boundary nodes would be
+<br /> 
+`utig1-10326     utig1-2575`
+<br /> 
+`utig1-10327     utig1-2574`
+<br /> 
+</details>
 
 ### Verkko's final graph coverage fix
 In verkko up to (and including )v2.2.1 coverage of the short nodes in tangles in final graph (assembly.homopolymer-compressed.gfa) is deeply flawed. To get the updated coverage file we suggest to run additional scripts
@@ -96,6 +89,6 @@ In verkko up to (and including )v2.2.1 coverage of the short nodes in tangles in
 
 and then pass `utig4_upt.ont-coverage.csv` as `--coverage-file` in main script.
 
-Alternatively you can find how utig4- nodes match to the utig1- graph in utig42utig1.gaf and run tangle_traverser.py on the same tangle in hifi-only graph.
+Alternatively you can find how utig4- nodes match to the utig1- graph in utig42utig1.gaf and run TTT.py on the same tangle in hifi-only graph (2-processGraph/unitig-unrolled-hifi-resolved.gfa within verkko output directory). Usually this provides better results and does not require realigning ONT reads to graph.
 
 
