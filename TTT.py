@@ -12,8 +12,7 @@ from src.node_id_mapper import NodeIdMapper
 from src.MIP_optimizer import MIPOptimizer
 from src.input_parsing import (
     parse_gfa, parse_gaf, read_tangle_nodes, get_oriented_boundaries, identify_tangle_nodes, read_coverage_file,
-    coverage_from_graph, verify_coverage, calculate_median_coverage,
-    identify_boundary_nodes, clean_tips
+    coverage_from_graph, verify_coverage, calculate_median_coverage, clean_tips
 )
 from src.graph_transformation import (
     get_canonical_rc_vertex,
