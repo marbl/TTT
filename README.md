@@ -21,11 +21,11 @@ UNDER CONSTRUCTION!
 Generally there are three main reasons for gaps in a scaffold:
 * Lack of coverage
   
-  TTT searches for the "best" path in the assembly graph that traverses the gap. If there's no path because of the coverage gap --- nothing can be done.
+  TTT searches for the "best" path in the assembly graph that traverses the gap. If there's no path because of the coverage gap &mdash; nothing can be done.
   <p>
   <img width="400" height="400" alt="gap" src="https://github.com/user-attachments/assets/695419c0-a7fb-4728-8454-0433bfe66433" />  
     
-  <em> Scaffold &lt;utig4-1497[N100000N:scaffold]&lt;utig4-340 --- nothing can be done </em>
+  <em> Scaffold &lt;utig4-1497[N100000N:scaffold]&lt;utig4-340 &mdash; nothing can be done </em>
 </p>
   
 * Long homozygous nodes
@@ -66,8 +66,9 @@ Instead of those two options one can use `--verkko-output <verkko output directo
 - `--outdir` Output directory
 
 - `--boundary-nodes <boundary_nodes_file>` to locate tangle. 
-`boundary_nodes_file` should contain tab separated pairs of incoming and outgoing boundary nodes, one pair by line. 
-Boundary nodes should completely separate the tangle from the rest of the graph --- after their removal there should be no path between tangle nodes and any remaining non-tangle nodes. Also they should be non-repetive and heterozygous in case of 'diploid' tangles. Currently TTT does not support tangles with more than 2 traversing paths (i.e. most of the rDNA tangles in human-like genomes)
+`boundary_nodes_file` should contain tab separated pairs of incoming and outgoing boundary nodes, one pair by line. Also they should be non-repetive and heterozygous in case of 'diploid' tangles.
+Boundary nodes should completely separate the tangle from the rest of the graph &mdash; after their removal there should be no path in remaining graph between tangle nodes and any other non-tangle nodes.
+
 <details>
 <summary>Example</summary>
 <img width="903" height="895" alt="helo_border" src="https://github.com/user-attachments/assets/693575f7-4bd4-44f0-8774-bc78fbf98224" />
@@ -79,6 +80,12 @@ For this tangle decent choice of boundary nodes would be
 `utig1-10327     utig1-2574`
 <br /> 
 </details>
+Currently TTT does not support tangles with more than 2 traversing paths (i.e. most of the rDNA tangles in human-like genomes)
+
+<br />
+
+### Output
+TTT outputs two files to the `<outdir>` &mdash; `traversal.multiplicities.csv` with estimated multiplicities of tangle nodes (can be used with Bandage); `traversal.gaf` with the resulting path and, if graph .gfa file contained node sequences &mdash; `traversal.hpc.fasta` with a patch sequence. However, when combined with verkko (since verkko's graph is based on homopolymer-compressed sequences), this patch is also homopolymer compressed. To get non-hpc sequence you'll need to rerun verkko providing `traversal.gaf` with `--path` option &mdash; see <a href="https://github.com/marbl/verkko?tab=readme-ov-file#consensus-for-user-provided-paths"> verkko's manual </a> for details.
 
 ### Verkko's final graph coverage fix
 In verkko up to (and including )v2.2.1 coverage of the short nodes in tangles in final graph (assembly.homopolymer-compressed.gfa) is deeply flawed. To get the updated coverage file we suggest to run additional scripts
@@ -89,6 +96,6 @@ In verkko up to (and including )v2.2.1 coverage of the short nodes in tangles in
 
 and then pass `utig4_upt.ont-coverage.csv` as `--coverage-file` in main script.
 
-Alternatively you can find how utig4- nodes match to the utig1- graph in utig42utig1.gaf and run TTT.py on the same tangle in hifi-only graph (2-processGraph/unitig-unrolled-hifi-resolved.gfa within verkko output directory). Usually this provides better results and does not require realigning ONT reads to graph.
+Alternatively you can find how utig4- nodes match to the utig1- graph in `utig42utig1.gaf` and run TTT.py on the same tangle in hifi-only graph (`2-processGraph/unitig-unrolled-hifi-resolved.gfa` within verkko output directory). Usually this provides better results and does not require realigning ONT reads to graph.
 
 
