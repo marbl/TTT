@@ -43,7 +43,7 @@ class NodeIdMapper:
             node_id = int(parts[1])
 
         # utig4-0 same as its RC
-        if node_id < self.last_enumerated_node:
+        if node_id <= self.last_enumerated_node:
             self.last_enumerated_node += 1
             node_id = self.last_enumerated_node
             logging.info(f"Assigned enumerated ID {node_id} to node {node_str}, utig4-0 special case")

@@ -123,6 +123,36 @@ def get_nonoriented_graph(directed_graph:nx.DiGraph) -> nx.Graph:
        res.add_edge(abs(u), abs(v), mid_length = directed_graph.nodes[u].get('length', 0) + directed_graph.nodes[v].get('length', 0))
     return res
 
+def parse_gaf_string (gaf_string, node_mapper):
+    nodes = []
+    node = ""
+    for char in gaf_string:
+        if char in "<>":
+            if node:
+                nodes.append(node)
+            node = char
+        else:
+            node += char
+
+    if node:
+        nodes.append(node)
+    int_nodes = []
+    for node in nodes:
+        int_node = node_mapper.parse_node_id(node[1:])
+        if node[0] == "<":
+            int_node = -int_node
+        int_nodes.append(int_node)
+    return int_nodes
+
+def filter_gaf_nodes(gaf_nodes, interesting_nodes):
+    start = 0
+    end = len(gaf_nodes) - 1
+    while start <= end and gaf_nodes[start] not in interesting_nodes:
+        start += 1
+    while end >= start and gaf_nodes[end] not in interesting_nodes:
+        end -= 1
+    return gaf_nodes[start:end+1]
+
 def parse_gaf(gaf_file, interesting_nodes, filtered_file, quality_threshold, node_mapper):
     res = []
     if filtered_file:
@@ -138,31 +168,13 @@ def parse_gaf(gaf_file, interesting_nodes, filtered_file, quality_threshold, nod
             if quality_score < quality_threshold:
                 continue
 
-            nodes = []
-            node = ""
-            for char in parts[5].strip():
-                if char in "<>":
-                    if node:
-                        nodes.append(node)
-                    node = char
-                else:
-                    node += char
-            if node:
-                nodes.append(node)
-            filtered_nodes = nodes.copy()
-            nodes = []
-            good = True
-            for fnode in filtered_nodes:            
-                int_node = node_mapper.parse_node_id(fnode[1:])
-                if not (int_node in interesting_nodes):
-                    good = False
-                    break
-                if fnode[0] == "<":
-                    int_node = -int_node
-                nodes.append(int_node)   
+            nodes = parse_gaf_string(parts[5], node_mapper)
+
+            filtered_nodes = filter_gaf_nodes(nodes, interesting_nodes)
+            
             #reverse_complement would be added in AlignmentScorer
-            if good and len(nodes) > 1:
-                res.append(nodes)
+            if len(filtered_nodes) > 1:
+                res.append(filtered_nodes)
                 if filtered_file:
                     out_file.write(line)
     return  res 
