@@ -67,6 +67,7 @@ def optimize_paths(multi_graph, boundary_nodes, original_graph, num_initial_path
         logging.info(f"Final score for seed {seed}: {current_score}.")
         if current_score > best_score:
             logging.info(f"New best path found for seed {seed} with score {current_score}.")
+            logging.info(f"Path: {get_gaf_string(current_path, node_id_mapper)}")
             best_path = current_path
             best_score = current_score
     
@@ -94,7 +95,7 @@ def parse_arguments():
 
     parser.add_argument("--coverage", help="Path to a file with node coverages (verkko's format; newline separated pairs node_id coverage). If not provided, coverage will be filled from the GFA file.")
     parser.add_argument("--median-unique", type=float, help="Median coverage for reliable unique nodes in tangle. If not provided, autodetected.")
-    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set the logging level (default: INFO).")
+    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set the logging level for log file (default: INFO).")
 
     parser.add_argument("--num-initial-paths", type=int, default=10, help="Number of initial paths to generate (default: 10).")
     parser.add_argument("--max-iterations", type=int, default=100000, help="Maximum iterations for path optimization (default: 100000).")
@@ -130,7 +131,7 @@ def main():
     # Verifying that coverage matches the graph
     # For rare cases coverage may be missing for some nodes, will update with median then 
     verify_coverage(cov, original_graph, node_id_mapper)
-
+    #boundary nodes: map from incoming to outgoing
     tangle_nodes, boundary_nodes = identify_tangle_nodes(args, original_graph, node_id_mapper)
     clean_tips(tangle_nodes, original_graph, node_id_mapper)
     nor_nodes = {abs(node) for node in tangle_nodes}

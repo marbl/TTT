@@ -123,7 +123,7 @@ def get_nonoriented_graph(directed_graph:nx.DiGraph) -> nx.Graph:
        res.add_edge(abs(u), abs(v), mid_length = directed_graph.nodes[u].get('length', 0) + directed_graph.nodes[v].get('length', 0))
     return res
 
-def parse_gaf_string (gaf_string, node_mapper):
+def parse_gaf_string (gaf_string, node_mapper) -> list[int]:
     nodes = []
     node = ""
     for char in gaf_string:
@@ -144,7 +144,7 @@ def parse_gaf_string (gaf_string, node_mapper):
         int_nodes.append(int_node)
     return int_nodes
 
-def filter_gaf_nodes(gaf_nodes, interesting_nodes):
+def filter_gaf_nodes(gaf_nodes, interesting_nodes) -> list[int]:
     start = 0
     end = len(gaf_nodes) - 1
     while start <= end and gaf_nodes[start] not in interesting_nodes:
@@ -381,13 +381,14 @@ def calculate_median_coverage(args, nor_nodes, original_graph:nx.DiGraph, cov, b
         min_b = min(min_b, cov[abs(sink)])
     if args.median_unique is not None:
         return [args.median_unique/GIVEN_MEDIAN_COVERAGE_VARIATION, args.median_unique * GIVEN_MEDIAN_COVERAGE_VARIATION]
-    calculated_median = calculate_median_unique_coverage(nor_nodes, original_graph, cov, min_b, node_mapper)
-    if calculated_median is not None:
-        return [calculated_median/DETECTED_MEDIAN_COVERAGE_VARIATION, calculated_median* DETECTED_MEDIAN_COVERAGE_VARIATION]
-    else:
-        res = [min_b/DETECTED_MEDIAN_COVERAGE_VARIATION, min_b* DETECTED_MEDIAN_COVERAGE_VARIATION]
-        logging.warning(f"Failed to calculate median unique coverage for tangle. Using coverage based on neighbours {res} but better provide it manually with--median-unique.")
-        return res
+    #calculated_median = calculate_median_unique_coverage(nor_nodes, original_graph, cov, min_b, node_mapper)
+    #if calculated_median is not None:
+    #    return [calculated_median/DETECTED_MEDIAN_COVERAGE_VARIATION, calculated_median* DETECTED_MEDIAN_COVERAGE_VARIATION]
+    #else:
+    res = [min_b/DETECTED_MEDIAN_COVERAGE_VARIATION, min_b* DETECTED_MEDIAN_COVERAGE_VARIATION]
+    logging.info(f"Using coverage range based on boundary nodes {res}, you can provide a better estimate with --median-unique.")
+    #logging.warning(f"Failed to calculate median unique coverage for tangle. Using coverage based on neighbours {res} but better provide it manually with--median-unique.")
+    return res
 
 def identify_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMapper):
     boundary = []
@@ -404,9 +405,27 @@ def identify_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMap
             log_assert(node1 in original_graph.nodes(), f"Boundary node {node_mapper.node_id_to_name_safe(node1)} not found in the provided graph {args.graph} ")
             log_assert(node2 in original_graph.nodes(), f"Boundary node {node_mapper.node_id_to_name_safe(node2)} not found in the provided graph {args.graph} ")
             boundary.append([node1, node2])
-    log_assert(len(boundary) >=1 and len(boundary) <= 2, f"Expected 1 or 2 pairs of boundary nodes, got {len(boundary)}")
+    log_assert(len(boundary) >=1 and len(boundary) <= 2, f"Expected 1 or 2 pairs of boundary nodes, got {len(boundary)}")    
 
     indirect_graph = get_nonoriented_graph(original_graph)
+
+    #we want paths to be collinear, so sometimes will initiate swaps within the pair
+    if len (boundary) == 2:
+        dists = [[],[]]
+        logging.debug("Checking pairwise unoriented distances between boundary nodes")
+        for i in range (2):
+            for j in range(2):
+                dists[i].append(nx.shortest_path_length(indirect_graph, boundary[0][i], boundary[1][j],  weight='mid_length') - original_graph.nodes[boundary[0][i]].get('length', 0) - original_graph.nodes[boundary[1][j]].get('length', 0))
+        logging.debug(f"unoriented distances between borders {dists}")
+        if dists[0][0] < dists[0][1] and dists[1][1] < dists[1][0]:
+            logging.debug(f"Distances look fine")
+        elif dists[0][0] > dists[0][1] and dists[1][1] > dists[1][0]:
+            logging.debug(f"Swapping boundary nodes for better collinearity")
+            boundary[1] = boundary[1][::-1]
+        else:
+            logging.debug(f"Boundary node pairs do not allow to detecte collinear paths")
+
+
     source_name = node_mapper.node_id_to_name_safe(boundary[0][0])
     sink_name = node_mapper.node_id_to_name_safe(boundary[0][1])
     distance, path = nx.single_source_dijkstra(indirect_graph, boundary[0][0], boundary[0][1], weight='mid_length')
@@ -419,6 +438,7 @@ def identify_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMap
         for boundary_node in boundary_pair:
             indirect_graph.remove_node(boundary_node)
     tangle_component = nx.node_connected_component(indirect_graph, inside_node)
+    #TODO: incoming/outgoing check
     if len(tangle_component) + len(boundary) * 2 >= len(original_component):
         logging.warning(f"Boundary nodes do not isolate tangle from the rest of the component!!!")
     logging.info (f"Original component size: {len(original_component)} nodes, Tangle size: {len(tangle_component)}")
@@ -467,4 +487,4 @@ def get_oriented_boundaries(args, original_graph:nx.DiGraph, tangle_nodes, node_
     res[start] = end
     return res
 
-
+#Disqualify tangles with large tips

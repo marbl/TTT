@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import logging
-
+from .logging_utils import log_assert
 
 class NodeIdMapper:
     """Class to handle node ID to name mapping and vice versa."""
-    
+    #special case not to rename most of the nodes because of utig0
+    UTIG0 = 12339239
     def __init__(self):
         # Map node ID to string node names (only positive ids, unoriented)
         self.node_id_to_name = {}
@@ -43,13 +44,18 @@ class NodeIdMapper:
             node_id = int(parts[1])
 
         # utig4-0 same as its RC
-        if node_id <= self.last_enumerated_node:
+        if node_id == 0:
+            node_id = self.UTIG0
+        elif node_id <= self.last_enumerated_node or node_id == self.UTIG0:
             self.last_enumerated_node += 1
             node_id = self.last_enumerated_node
-            logging.info(f"Assigned enumerated ID {node_id} to node {node_str}, utig4-0 special case")
+            logging.debug(f"Assigned enumerated ID {node_id} to node {node_str}, utig4-0 special case")
         
         self.node_id_to_name[node_id] = node_str
         self.name_to_node_id[node_str] = node_id
+
+        log_assert(node_id > 0, f"Node ID is 0, which is invalid. nodestr {node_str}")
+
         return node_id
     
     def add_mapping(self, node_id, node_str):

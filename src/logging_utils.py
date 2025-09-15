@@ -56,7 +56,7 @@ def setup_logging(args):
     # Console handler
     console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setFormatter(RuntimeFormatter(log_format, datefmt=datefmt, start_time=start_time))
-    console_handler.setLevel(log_level)
+    console_handler.setLevel(logging.INFO)
     root_logger.addHandler(console_handler)
     
     # Log the GitHub commit hash if available

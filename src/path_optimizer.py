@@ -71,9 +71,37 @@ class PathOptimizer:
                             logging.debug(f"after {path[:i]}")
                             path = path[:i] + add_cycle + path[i:]                        
 
-                # Move to next node
+            #Making paths before and after AUX collinear, to avoid inversions
+            #Seems that it is not reliable, reordering border nodes before
+            '''if self.node_mapper.has_name("AUX"):
+                aux = -1
+                aux_id = self.node_mapper.get_id_for_name("AUX")
+                for i in range(len(path)):
+                    if abs(path[i].original_node) == aux_id:
+                        aux = i
+                        logging.debug(f"Found AUX at position {aux}")
+                        break
+                log_assert(aux != -1, "AUX node present in graph(2-haplo tangle) but not found in path")
+                forward_matches = 0
+                reverse_matches = 0
+                for i in range (aux):
+                    for j in range (aux + 1, len(path)):
+                        if path[i].original_node == path[j].original_node:
+                            forward_matches += 1
+                            logging.debug (f"Forward match node {self.node_mapper.node_id_to_name_safe(path[i].original_node)}")
+                        if path[i].original_node == -path[j].original_node:
+                            logging.debug (f"Reverse match node {self.node_mapper.node_id_to_name_safe(path[i].original_node)}")
+                            reverse_matches += 1
+                logging.debug (f"Forward matches: {forward_matches}, Reverse matches: {reverse_matches}")
+                if reverse_matches > forward_matches:
+                    logging.debug("More reverse matches than forward matches, reversing second subpath")
+                    logging.debug(f"Path before inversion: {get_gaf_string(path, self.node_mapper)}")
+                    path = path[:aux+1] + rc_path(path[aux+1:], self.rc_vertex_map)
+                    logging.debug(f"Path after inversion: {get_gaf_string(path, self.node_mapper)}")
+'''
             logging.info(f"Randomized Eulerian path found with seed {self.seed} with {len(path)} nodes !")
             logging.debug (f"{get_gaf_string(path, self.node_mapper)}")
+
             self.traversing_path = path
             self.__update_start_end_positions()
         else:
@@ -106,6 +134,15 @@ class PathOptimizer:
                 self.end_positions[edge_descr.target] = []
             self.end_positions[edge_descr.target].append(idx)
         return
+#TODO: generate all changes, shuffle, try to apply one by one.
+
+    def get_aux_position(self):
+        if self.node_mapper and self.node_mapper.has_name("AUX"):
+            aux_id = self.node_mapper.get_id_for_name("AUX")
+            for idx, edge_descr in enumerate(self.traversing_path):
+                if edge_descr.original_node == aux_id:
+                    return idx
+        return -1
 
     def get_random_change(self, iter):
         """
@@ -127,21 +164,15 @@ class PathOptimizer:
             start_vertex = self.traversing_path[i].source            
             
             rc_start_v = self.rc_vertex_map[start_vertex]
-            if iter % 2 == 0 and rc_start_v in self.end_positions:
+            if iter % 4 == 0 and rc_start_v in self.end_positions:
                 # We can do inversion
                 j_candidates = [j for j in self.end_positions[rc_start_v] if j > i]
                 if not j_candidates:
                     continue
                 j = random.choice(j_candidates)
-                # not allowing to invert AUX node
-                forbidden = False
-                if self.node_mapper and self.node_mapper.has_name("AUX"):                
-                    aux_id = self.node_mapper.get_id_for_name("AUX")
-                    for ind in range(i, j + 1):
-                        if self.traversing_path[ind].original_node == aux_id:
-                            forbidden = True
-                            break
-                if forbidden:
+                # not allowing to invert AUX node                
+                aux_pos = self.get_aux_position()
+                if  i <= aux_pos <= j:
                     logging.debug(f"Skipping inversion due to AUX node presence between {i} and {j}")
                     continue
                 
@@ -150,37 +181,70 @@ class PathOptimizer:
                 logging.debug(f"{_ + 1} attempts to generate random inversion")                
                 logging.debug(f"{get_gaf_string(new_path, self.node_mapper)}")
                 return new_path
-            else: 
-                #Doing regular interval swap
-                j = random.randint(i + 1,  path_length - 2) 
-                end_vertex = self.traversing_path[j].target
+            else:
+                if _ % 4 == 0:
+                    #Trying RC swaps
+                    j = random.randint(i + 1,  path_length - 2) 
+                    end_vertex = self.traversing_path[j].target
+                    rc_end_vertex = self.rc_vertex_map[end_vertex]
 
-                k_candidates = [k for k in self.start_positions.get(start_vertex, []) if k > j]
-                if not k_candidates:
-                    continue
-                k = random.choice(k_candidates)
+                    k_candidates = [k for k in self.start_positions.get(rc_end_vertex, []) if k > j]
+                    if not k_candidates:
+                        continue
+                    k = random.choice(k_candidates)
 
-                l_candidates = [l for l in self.end_positions.get(end_vertex, []) if l > k]
-                if not l_candidates:
-                    continue
-                
-                l = random.choice(l_candidates)
-                # Swap the intervals
-                new_path = (
-                    self.traversing_path[:i]
-                    + self.traversing_path[k:l + 1]
-                    + self.traversing_path[j + 1:k]
-                    + self.traversing_path[i:j + 1]
-                    + self.traversing_path[l + 1:]
-                )
-                logging.debug(f"{_ + 1} attempts to generate random swap")
-                logging.debug(f"{get_gaf_string(new_path, self.node_mapper)}")
-                return new_path
-        logging.warning("Failed to find valid intervals to swap")
-        logging.warning(f"{get_gaf_string(self.traversing_path, self.node_mapper)}")
+                    l_candidates = [l for l in self.end_positions.get(rc_start_v, []) if l > k]
+                    if not l_candidates:
+                        continue
+                    
+                    l = random.choice(l_candidates)
+                    # Swap the intervals
+                    aux_pos = self.get_aux_position()
+                    if(i <= aux_pos <= j or k <= aux_pos <= l):
+                        logging.debug(f"Skipping RC swap due to AUX node presence (pos {aux_pos}) between {i}-{j} or {k}-{l}")
+                        continue
+                    new_path = (
+                        self.traversing_path[:i]
+                        + rc_path(self.traversing_path[k:l + 1], self.rc_vertex_map)
+                        + self.traversing_path[j + 1:k]
+                        + rc_path(self.traversing_path[i:j + 1], self.rc_vertex_map)
+                        + self.traversing_path[l + 1:]
+                    )
+                    logging.debug(f"{_ + 1} attempts to generate random swap")
+                    logging.debug(f"{get_gaf_string(new_path, self.node_mapper)}")
+                    return new_path
+                else:
+                    # Doing regular interval swap
+                    j = random.randint(i + 1,  path_length - 2) 
+                    end_vertex = self.traversing_path[j].target
+
+                    k_candidates = [k for k in self.start_positions.get(start_vertex, []) if k > j]
+                    if not k_candidates:
+                        continue
+                    k = random.choice(k_candidates)
+
+                    l_candidates = [l for l in self.end_positions.get(end_vertex, []) if l > k]
+                    if not l_candidates:
+                        continue
+                    
+                    l = random.choice(l_candidates)
+                    # Swap the intervals
+                    new_path = (
+                        self.traversing_path[:i]
+                        + self.traversing_path[k:l + 1]
+                        + self.traversing_path[j + 1:k]
+                        + self.traversing_path[i:j + 1]
+                        + self.traversing_path[l + 1:]
+                    )
+                    logging.debug(f"{_ + 1} attempts to generate random swap")
+                    logging.debug(f"{get_gaf_string(new_path, self.node_mapper)}")
+                    return new_path
+        logging.warning(f"Failed to find valid intervals to swap iteration {iter}")
+        logging.warning(f"{get_gaf_string(self.traversing_path, self.node_mapper)}")        
         return self.traversing_path
 
-    #Only for logging
+    #Only for logging, 
+    #TODO: unify with random change, add support for RC swaps
     def get_synonymous_changes(self, alignment_scorer):
         self.__update_start_end_positions()
         swappable_intervals = set()
@@ -257,16 +321,25 @@ class PathOptimizer:
                         if get_gaf_string(inverted_path, self.node_mapper) == get_gaf_string(self.traversing_path[start_path_ind:end_path_ind + 1], self.node_mapper):
                             logging.debug(f"Found equivalent inverted path: {get_gaf_string(inverted_path, self.node_mapper)}")
                             continue
+                        logging.debug(f"Checking inversion {start_path_ind}-{end_path_ind}")
+                        logging.debug(f"Subpath {get_gaf_string(self.traversing_path[start_path_ind:end_path_ind], self.node_mapper)}")
                         new_path = self.traversing_path[:start_path_ind] + rc_path(self.traversing_path[start_path_ind:end_path_ind + 1], self.rc_vertex_map) + self.traversing_path[end_path_ind + 1:]
                         new_score = alignment_scorer.score_corasick(new_path)
-                        log_assert(new_score <= final_score, "New path score is greater than original path score")
+                        
+                        
                         logging.debug(f"New path score: {new_score}, original path score: {final_score} positions {start_path_ind}-{end_path_ind}")
                         if new_score < final_score:
                             logging.debug(f"Inversion {start_path_ind}-{end_path_ind} decreases score, continuing")
                         elif new_score == final_score:
                             invertable_intervals.add((start_path_ind, end_path_ind))
                             logging.debug(f"Inversion {start_path_ind}-{end_path_ind} does not change score")
-                            logging.debug(f"Edge paths are {get_gaf_string(path[start_path_ind:end_path_ind + 1], self.node_mapper)}")
+                            logging.debug(f"Edge paths are {get_gaf_string(self.traversing_path[start_path_ind:end_path_ind + 1], self.node_mapper)}")
+                        else:
+                            aux_pos = self.get_aux_position()    
+                            if (start_path_ind <= aux_pos <= end_path_ind):
+                                logging.warning(f"Unexpected final score improved {new_score} > {final_score} and affects AUX position {aux_pos}")
+                            else:
+                                logging.warning(f"Unexpected final score improved {new_score} > {final_score} and does not affect AUX position {aux_pos}")
         #TODO: check for possible inversions
         if len(invertable_intervals) + len(swappable_intervals) > 0:
             if len(swappable_intervals) > 0:
@@ -293,7 +366,7 @@ class PathOptimizer:
                     logging.debug(f"Found AUX at position {aux}")
                     break
         if aux > 0:
-            paths = [self.traversing_path[:aux - 1], self.traversing_path[aux + 1:]]
+            paths = [self.traversing_path[:aux], self.traversing_path[aux + 1:]]
         else:
             paths = [self.traversing_path]
 

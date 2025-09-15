@@ -14,7 +14,9 @@ def get_canonical_nodepair(oriented_node1, oriented_node2, original_graph, node_
     """Returns a canonical lexicographically smallest link for a junction"""
     to_node = oriented_node2
     from_node = oriented_node1
-
+    #sink and source should not be in original graph, special case
+    if to_node == 0 or from_node == 0:
+        return (from_node, to_node)
     for node in original_graph.successors(oriented_node1):
         if node < to_node:
             to_node = node

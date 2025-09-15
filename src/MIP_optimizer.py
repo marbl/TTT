@@ -167,14 +167,6 @@ class MIPOptimizer:
         return junction_equations, must_use_nodes, coverage, boundary_values
     
     def write_multiplicities(self, output_file, solution, cov):
-        """
-        Write multiplicity solutions to a CSV file.
-        
-        Args:
-            output_file: Path to the output CSV file
-            solution: Dictionary of multiplicity solutions
-            cov: Coverage dictionary
-        """
         with open(output_file, 'w') as out_file:
             out_file.write("node\tcoverage\tmult\n")
             if len(solution) > 0:
