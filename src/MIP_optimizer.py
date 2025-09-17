@@ -5,7 +5,6 @@ from .logging_utils import log_assert
 from .node_id_mapper import NodeIdMapper
 
 
-#Initial refactoring, class can be
 class MIPOptimizer:
     def __init__(self, node_mapper):
         """

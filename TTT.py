@@ -141,13 +141,17 @@ def main():
     used_nodes = nor_nodes.copy()
     for b in boundary_nodes:
         used_nodes.add(abs(b))
-        used_nodes.add(abs(boundary_nodes[b]))
-   
+        used_nodes.add(abs(boundary_nodes[b]))   
+    
+    used_or_nodes = tangle_nodes.copy()
+    for b in boundary_nodes:
+        used_or_nodes.add(b)
+        used_or_nodes.add(boundary_nodes[b])
 
-    median_unique_range = calculate_median_coverage(args, nor_nodes, original_graph, cov, boundary_nodes, node_id_mapper)    
+    median_unique_range = calculate_median_coverage(args, nor_nodes, original_graph, cov, boundary_nodes, node_id_mapper)
     median_unique = math.sqrt(median_unique_range[0] * median_unique_range[1])
     filtered_alignment_file = os.path.join(args.outdir, f"{args.basename}.q{args.quality_threshold}.used_alignments.gaf")
-    alignments = parse_gaf(args.alignment, used_nodes, filtered_alignment_file, args.quality_threshold, node_id_mapper)
+    alignments = parse_gaf(args.alignment, used_or_nodes, filtered_alignment_file, args.quality_threshold, node_id_mapper)
     alignment_scorer = AlignmentScorer(alignments)
     logging.info("Starting multiplicity counting...")
     # TODO: instead of a_values we just use coverage
