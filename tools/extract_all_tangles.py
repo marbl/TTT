@@ -342,6 +342,7 @@ def verify_alignment(alignments, node_id_mapper, outdir):
                         has_gaps = True
                         break
                 verkko_subpath_string = "".join([node_id_mapper.node_id_to_name_safe(n) for n in sub_path])
+
                 if has_gaps:
                     logging.info(f"Verkko's path has gaps for borders {','.join([node_id_mapper.node_id_to_name_safe(b) for b in borders])}, not evaluating")
                     logging.info (f"verkko_path {verkko_subpath_string}")
@@ -472,7 +473,7 @@ if __name__ == "__main__":
     node_id_mapper = NodeIdMapper()
     alignments = parse_alignment_file(alignment_file, node_id_mapper)
     
-    run_id = 3
+    run_id = 4
     
     #get_tangle_components(graph, coverage, alignments, node_id_mapper)
 
@@ -490,5 +491,5 @@ if __name__ == "__main__":
                 os.system(f"sbatch --time=3:00:00 --mem=40g --cpus-per-task=28 --partition=norm,quick {script_file}")
     
     verify_alignments(alignments, node_id_mapper, f"TTT_{run_id}")
-    #realign_all_to_ref(graph_seq, REFERENCE, f"TTT_{run_id}")
-    #extract_all_res(f"TTT_{run_id}")
+    realign_all_to_ref(graph_seq, REFERENCE, f"TTT_{run_id}")
+    extract_all_res(f"TTT_{run_id}")
