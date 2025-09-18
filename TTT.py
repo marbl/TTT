@@ -54,6 +54,9 @@ def optimize_paths(multi_graph, boundary_nodes, original_graph, num_initial_path
                 break
             
             new_path = pathOptimizer.get_random_change(seed * max_iterations + i)
+            if new_path is None:
+                logging.info(f"Not able to change a path at all, stopping")
+                break
             new_score = alignment_scorer.score_corasick(new_path)
             if new_score > current_score:
                 logging.info(f"Improved score for seed {seed} at iteration {i}: {current_score} -> {new_score}.")
