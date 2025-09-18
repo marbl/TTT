@@ -157,91 +157,92 @@ class PathOptimizer:
         path_length = len(self.traversing_path)            
         self.__update_start_end_positions()
         max_tries = 10000  # Adjust based on path length
-        
-        for _ in range(max_tries):
-            # Select i and j such that i < j
-            i = random.randint(0, path_length - 3)
-            start_vertex = self.traversing_path[i].source            
-            
-            rc_start_v = self.rc_vertex_map[start_vertex]
-            if iter % 4 == 0 and rc_start_v in self.end_positions:
-                # We can do inversion
-                j_candidates = [j for j in self.end_positions[rc_start_v] if j > i]
-                if not j_candidates:
-                    continue
-                j = random.choice(j_candidates)
-                # not allowing to invert AUX node                
-                aux_pos = self.get_aux_position()
-                if  i <= aux_pos <= j:
-                    logging.debug(f"Skipping inversion due to AUX node presence between {i} and {j}")
-                    continue
+        for bonus in range (10):
+            for _ in range(max_tries):
+                # Select i and j such that i < j
+                i = random.randint(0, path_length - 3)
+                start_vertex = self.traversing_path[i].source            
                 
-                # Invert the interval from i to j
-                new_path = self.traversing_path[:i] + rc_path(self.traversing_path[i:j + 1], self.rc_vertex_map) + self.traversing_path[j + 1:]
-                logging.debug(f"{_ + 1} attempts to generate random inversion")                
-                logging.debug(f"{get_gaf_string(new_path, self.node_mapper)}")
-                return new_path
-            else:
-                if _ % 4 == 0:
-                    #Trying RC swaps
-                    j = random.randint(i + 1,  path_length - 2) 
-                    end_vertex = self.traversing_path[j].target
-                    rc_end_vertex = self.rc_vertex_map[end_vertex]
-
-                    k_candidates = [k for k in self.start_positions.get(rc_end_vertex, []) if k > j]
-                    if not k_candidates:
+                rc_start_v = self.rc_vertex_map[start_vertex]
+                if iter % 4 == 0 and rc_start_v in self.end_positions:
+                    # We can do inversion
+                    j_candidates = [j for j in self.end_positions[rc_start_v] if j > i]
+                    if not j_candidates:
                         continue
-                    k = random.choice(k_candidates)
-
-                    l_candidates = [l for l in self.end_positions.get(rc_start_v, []) if l > k]
-                    if not l_candidates:
+                    j = random.choice(j_candidates)
+                    # not allowing to invert AUX node                
+                    aux_pos = self.get_aux_position()
+                    if  i <= aux_pos <= j:
+                        logging.debug(f"Skipping inversion due to AUX node presence between {i} and {j}")
                         continue
                     
-                    l = random.choice(l_candidates)
-                    # Swap the intervals
-                    aux_pos = self.get_aux_position()
-                    if(i <= aux_pos <= j or k <= aux_pos <= l):
-                        logging.debug(f"Skipping RC swap due to AUX node presence (pos {aux_pos}) between {i}-{j} or {k}-{l}")
-                        continue
-                    new_path = (
-                        self.traversing_path[:i]
-                        + rc_path(self.traversing_path[k:l + 1], self.rc_vertex_map)
-                        + self.traversing_path[j + 1:k]
-                        + rc_path(self.traversing_path[i:j + 1], self.rc_vertex_map)
-                        + self.traversing_path[l + 1:]
-                    )
-                    logging.debug(f"{_ + 1} attempts to generate random swap")
+                    # Invert the interval from i to j
+                    new_path = self.traversing_path[:i] + rc_path(self.traversing_path[i:j + 1], self.rc_vertex_map) + self.traversing_path[j + 1:]
+                    logging.debug(f"{_ + 1} attempts to generate random inversion")                
                     logging.debug(f"{get_gaf_string(new_path, self.node_mapper)}")
                     return new_path
                 else:
-                    # Doing regular interval swap
-                    j = random.randint(i + 1,  path_length - 2) 
-                    end_vertex = self.traversing_path[j].target
+                    if _ % 4 == 0:
+                        #Trying RC swaps
+                        j = random.randint(i + 1,  path_length - 2) 
+                        end_vertex = self.traversing_path[j].target
+                        rc_end_vertex = self.rc_vertex_map[end_vertex]
 
-                    k_candidates = [k for k in self.start_positions.get(start_vertex, []) if k > j]
-                    if not k_candidates:
-                        continue
-                    k = random.choice(k_candidates)
+                        k_candidates = [k for k in self.start_positions.get(rc_end_vertex, []) if k > j]
+                        if not k_candidates:
+                            continue
+                        k = random.choice(k_candidates)
 
-                    l_candidates = [l for l in self.end_positions.get(end_vertex, []) if l > k]
-                    if not l_candidates:
-                        continue
-                    
-                    l = random.choice(l_candidates)
-                    # Swap the intervals
-                    new_path = (
-                        self.traversing_path[:i]
-                        + self.traversing_path[k:l + 1]
-                        + self.traversing_path[j + 1:k]
-                        + self.traversing_path[i:j + 1]
-                        + self.traversing_path[l + 1:]
-                    )
-                    logging.debug(f"{_ + 1} attempts to generate random swap")
-                    logging.debug(f"{get_gaf_string(new_path, self.node_mapper)}")
-                    return new_path
-        logging.warning(f"Failed to find valid intervals to swap iteration {iter}")
+                        l_candidates = [l for l in self.end_positions.get(rc_start_v, []) if l > k]
+                        if not l_candidates:
+                            continue
+                        
+                        l = random.choice(l_candidates)
+                        # Swap the intervals
+                        aux_pos = self.get_aux_position()
+                        if(i <= aux_pos <= j or k <= aux_pos <= l):
+                            logging.debug(f"Skipping RC swap due to AUX node presence (pos {aux_pos}) between {i}-{j} or {k}-{l}")
+                            continue
+                        new_path = (
+                            self.traversing_path[:i]
+                            + rc_path(self.traversing_path[k:l + 1], self.rc_vertex_map)
+                            + self.traversing_path[j + 1:k]
+                            + rc_path(self.traversing_path[i:j + 1], self.rc_vertex_map)
+                            + self.traversing_path[l + 1:]
+                        )
+                        logging.debug(f"{_ + 1} attempts to generate random swap")
+                        logging.debug(f"{get_gaf_string(new_path, self.node_mapper)}")
+                        return new_path
+                    else:
+                        # Doing regular interval swap
+                        j = random.randint(i + 1,  path_length - 2) 
+                        end_vertex = self.traversing_path[j].target
+
+                        k_candidates = [k for k in self.start_positions.get(start_vertex, []) if k > j]
+                        if not k_candidates:
+                            continue
+                        k = random.choice(k_candidates)
+
+                        l_candidates = [l for l in self.end_positions.get(end_vertex, []) if l > k]
+                        if not l_candidates:
+                            continue
+                        
+                        l = random.choice(l_candidates)
+                        # Swap the intervals
+                        new_path = (
+                            self.traversing_path[:i]
+                            + self.traversing_path[k:l + 1]
+                            + self.traversing_path[j + 1:k]
+                            + self.traversing_path[i:j + 1]
+                            + self.traversing_path[l + 1:]
+                        )
+                        logging.debug(f"{_ + 1} attempts to generate random swap")
+                        logging.debug(f"{get_gaf_string(new_path, self.node_mapper)}")
+                        return new_path
+            iter += 1
+        logging.warning(f"Failed to find any valid interval to swap iteration {iter-10} - {iter}")
         logging.warning(f"{get_gaf_string(self.traversing_path, self.node_mapper)}")        
-        return self.traversing_path
+        return None
 
     #Only for logging, 
     #TODO: unify with random change, add support for RC swaps
