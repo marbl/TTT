@@ -435,10 +435,22 @@ def identify_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMap
     inside_node = path[1]
     original_component = nx.node_connected_component(indirect_graph, inside_node)
     for boundary_pair in boundary:
-        for boundary_node in boundary_pair:
+        for boundary_node in boundary_pair:        
             indirect_graph.remove_node(boundary_node)
     tangle_component = nx.node_connected_component(indirect_graph, inside_node)
     #TODO: incoming/outgoing check
+    valid_tangle = True
+    for boundary_pair in boundary:
+        for boundary_node in boundary_pair:       
+            for pred in original_graph.predecessors(boundary_node):
+                for succ in original_graph.successors(boundary_node):
+                    if abs(pred) in tangle_component and abs(succ) in tangle_component:
+                        logging.error(f"Boundary nodes do not separate incoming and outgoing nodes for {node_mapper.node_id_to_name_safe(boundary_node)}, fix the boundary nodes")
+                        valid_tangle = False
+            
+    if not valid_tangle:
+        logging.error(f"Boundary nodes do not identify a valid tangle, exiting")
+        exit(1)
     if len(tangle_component) + len(boundary) * 2 >= len(original_component):
         logging.warning(f"Boundary nodes do not isolate tangle from the rest of the component!!!")
     logging.info (f"Original component size: {len(original_component)} nodes, Tangle size: {len(tangle_component)}")

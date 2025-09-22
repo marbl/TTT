@@ -385,27 +385,33 @@ def realign_to_ref(graph, reference_path, outdir):
     TTT_fasta = os.path.join(outdir, "traversal.full.fasta")
     verkko_res = os.path.join(outdir, "verkko.res")
     TTT_res = os.path.join(outdir, "TTT.res")
+    realign_script = os.path.join(outdir, "realign.sh")
     # Convert GAF to FASTA
-    convert_str = f"python {PATH_2_FASTA_SCRIPT} {graph} {verkko_gaf} > {verkko_fasta}"
-    logging.info(f"Converting gaf->fasta {convert_str}")
-    os.system(convert_str)
+    with open(realign_script, "w") as script_file:
+
+        script_file.write(f"#!/bin/bash\n")
+        script_file.write("module load minimap2\n")
+        convert_str = f"python {PATH_2_FASTA_SCRIPT} {graph} {verkko_gaf} > {verkko_fasta}"
+        logging.info(f"Converting gaf->fasta {convert_str}")
+        script_file.write(f"{convert_str}\n")
+        #os.system(convert_str)
 
 
-    convert_str = f"python {PATH_2_FASTA_SCRIPT} {graph} {TTT_gaf} > {TTT_fasta}"
-    logging.info(f"Converting gaf->fasta {convert_str}")
-    os.system(convert_str)
+        convert_str = f"python {PATH_2_FASTA_SCRIPT} {graph} {TTT_gaf} > {TTT_fasta}"
+        logging.info(f"Converting gaf->fasta {convert_str}")
+        #os.system(convert_str)
+        script_file.write(f"{convert_str}\n")
+        # Align FASTA files
+        minimap_str = f"minimap2 -x asm5 {reference_path} {verkko_fasta} -t 20 --secondary=no -c > {verkko_res}"
+        logging.info(f"Aligning with minimap2: {minimap_str}")
+        #os.system(minimap_str)
+        script_file.write(f"{minimap_str}\n")
+        minimap_str = f"minimap2 -x asm5 {reference_path} {TTT_fasta} -t 20 --secondary=no -c > {TTT_res}"
+        logging.info(f"Aligning with minimap2: {minimap_str}")
+        #os.system(minimap_str)
+        script_file.write(f"{minimap_str}\n")
+    os.system(f"sbatch --time=3:00:00 --mem=40g --cpus-per-task=28 --partition=norm,quick {realign_script}")
 
-    # Align FASTA files
-    minimap_str = f"minimap2 -x asm5 {reference_path} {verkko_fasta} -t 20 --secondary=no -c > {verkko_res}"
-    logging.info(f"Aligning with minimap2: {minimap_str}")
-    os.system(minimap_str)
-    minimap_str = f"minimap2 -x asm5 {reference_path} {TTT_fasta} -t 20 --secondary=no -c > {TTT_res}"
-    logging.info(f"Aligning with minimap2: {minimap_str}")
-    os.system(minimap_str)
-    
-    #align_fasta_files(verkko_fasta, reference_path, verkko_res)
-    #align_fasta_files(TTT_fasta, reference_path, TTT_res)
-    
 
 def verify_alignments(alignments, node_id_mapper, out_name):
     for dir in os.listdir(BASE_SUBDIR):

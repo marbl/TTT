@@ -165,7 +165,7 @@ class MIPOptimizer:
         for node in nor_nodes:        
             coverage[node] = float(cov[node])  # / median_unique
             logging.debug(f"Coverage of {self.node_mapper.node_id_to_name_safe(node)} : {coverage[node]}")
-            if coverage[node] / median_unique >= 0.5:
+            if (coverage[node] / median_unique >= 0.3 and (coverage[node] >= 5)) or coverage[node]/median_unique >= 0.6:
                 must_use_nodes.append((node, coverage[node]))
         must_use_nodes = sorted(must_use_nodes, key=lambda x: x[1], reverse=True)
         nonzeroes = [node for node, cov in must_use_nodes]
