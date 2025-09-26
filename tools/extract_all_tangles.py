@@ -19,7 +19,7 @@ from Bio import SeqIO
 
 PATH_2_FASTA_SCRIPT = "/data/antipovd2/devel/utils/sequence_tools/path2fasta.py" 
 REFERENCE = "/data/antipovd2/res/TTT_paper/HG002/hg002v1.1.hpc.fasta"
-#qREFERENCE = "/data/antipovd2/data/refs/hg002v1.1.hpc.concat.fasta"
+#REFERENCE = "/data/antipovd2/data/refs/hg002v1.1.hpc.concat.fasta"
 cov_variation = 1.5
 #bubble lens should not be significantly different
 len_variation = 1.5
@@ -479,11 +479,11 @@ if __name__ == "__main__":
     node_id_mapper = NodeIdMapper()
     alignments = parse_alignment_file(alignment_file, node_id_mapper)
     
-    run_id = 4
+    run_id = 6
     
     #get_tangle_components(graph, coverage, alignments, node_id_mapper)
 
-    if False:
+    if True:
         for dir in os.listdir(BASE_SUBDIR):                
             boundary_file = os.path.join(os.getcwd(), BASE_SUBDIR, dir, "boundary.txt")
             if os.path.exists(boundary_file):
@@ -495,7 +495,6 @@ if __name__ == "__main__":
                     f.write(f"{TTT_runstr}\n")
                 os.system(f"chmod +x {script_file}")
                 os.system(f"sbatch --time=3:00:00 --mem=40g --cpus-per-task=28 --partition=norm,quick {script_file}")
-    
-    verify_alignments(alignments, node_id_mapper, f"TTT_{run_id}")
-    realign_all_to_ref(graph_seq, REFERENCE, f"TTT_{run_id}")
-    extract_all_res(f"TTT_{run_id}")
+    #verify_alignments(alignments, node_id_mapper, f"TTT_{run_id}")
+    #realign_all_to_ref(graph_seq, REFERENCE, f"TTT_{run_id}")
+    #extract_all_res(f"TTT_{run_id}")

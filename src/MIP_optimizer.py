@@ -6,6 +6,9 @@ from .node_id_mapper import NodeIdMapper
 
 
 class MIPOptimizer:
+
+    ALWAYS_INCLUDE_COVERAGE_FRACTION = 0.7
+
     def __init__(self, node_mapper):
         """
         Initialize the MIP optimizer with a node mapper.
@@ -15,8 +18,9 @@ class MIPOptimizer:
         """
         self.node_mapper = node_mapper
     
-    def solve_MIP(self, equations, nonzeros, boundary_values, coverages, unique_coverage_range):
+    def solve_MIP(self, equations, nonzeros, boundary_values, coverages, unique_coverage_range , original_graph):
         # last element in equation - amount of boundary nodes    
+        #nonzeros = set()
         while True:
             prob = pulp.LpProblem("Minimize_Deviation", pulp.LpMinimize)    
             # Define multiplicity variables    
@@ -55,6 +59,12 @@ class MIPOptimizer:
 
             # Define continuous variables for absolute deviation |x_i - a_i|
             d_vars = {i: pulp.LpVariable(f"d_{i}", lowBound=0, cat="Continuous") for i in coverages}   
+            lengths = {i: original_graph.nodes[i].get('length', 0) for i in coverages}
+            #do not want boundary nodes to contribute to the objective, coverage is usually a bit lower within the tangle
+            for i in boundary_values:
+                if i in lengths:
+                    lengths[i] = 0
+
             inv_unique_coverage = pulp.LpVariable("uniqueness_multiplier", 
                                                 lowBound=1/unique_coverage_range[1], 
                                                 upBound=1/unique_coverage_range[0], 
@@ -62,9 +72,10 @@ class MIPOptimizer:
             for i in abs_keys:
                 prob += d_vars[i] >= (x_vars[i] + x_vars[-i]) - coverages[i] * inv_unique_coverage
                 prob += d_vars[i] >= coverages[i] * inv_unique_coverage - x_vars[i] - x_vars[-i]
-            
-            # Objective function: minimize sum of absolute deviations
-            objective = pulp.lpSum(d_vars[i] for i in abs_keys)
+
+            # Objective function: minimize sum of absolute deviations weighted by node lengths
+            objective = pulp.lpSum(d_vars[i] * lengths[i] for i in abs_keys)
+            #objective = pulp.lpSum(d_vars[i] for i in abs_keys)
             prob += objective
 
             logging.debug("Linear programming problem:")
@@ -82,6 +93,10 @@ class MIPOptimizer:
             if pulp.LpStatus[prob.status] != "Optimal":
                 logging.warning("MIP did not find an optimal solution.")
                 if len (nonzeros) > 0:
+                    #score = pulp.value(objective)  
+                    #detected_coverage = 1/pulp.value(inv_unique_coverage)
+                    #logging.info(f"Unique coverage for the best MIP solution {detected_coverage}, solution score {score}")
+    
                     logging.warning (f"Removing the constraint that forced to include {self.node_mapper.node_id_to_name_safe(nonzeros[-1])} cov {coverages[nonzeros[-1]]} into traversing paths")
                     nonzeros.pop()
                     continue
@@ -165,7 +180,8 @@ class MIPOptimizer:
         for node in nor_nodes:        
             coverage[node] = float(cov[node])  # / median_unique
             logging.debug(f"Coverage of {self.node_mapper.node_id_to_name_safe(node)} : {coverage[node]}")
-            if (coverage[node] / median_unique >= 0.3 and (coverage[node] >= 5)) or coverage[node]/median_unique >= 0.6:
+            #if (coverage[node] / median_unique >= 0.3 and (coverage[node] >= 5)) or coverage[node]/median_unique >= 0.6:
+            if (coverage[node] / median_unique >= self.ALWAYS_INCLUDE_COVERAGE_FRACTION):
                 must_use_nodes.append((node, coverage[node]))
         must_use_nodes = sorted(must_use_nodes, key=lambda x: x[1], reverse=True)
         nonzeroes = [node for node, cov in must_use_nodes]

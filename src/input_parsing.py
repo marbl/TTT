@@ -10,7 +10,8 @@ from .logging_utils import log_assert
 from .node_id_mapper import NodeIdMapper
 
 #allowed median coverage range in range [median_unique/MEDIAN_COVERAGE_VARIATION, median_unique * MEDIAN_COVERAGE_VARIATION]
-DETECTED_MEDIAN_COVERAGE_VARIATION = 1.5
+DETECTED_LOW_MEDIAN_COVERAGE_VARIATION = 2.0
+DETECTED_HIGH_MEDIAN_COVERAGE_VARIATION = 1.2
 GIVEN_MEDIAN_COVERAGE_VARIATION = 1.2
 
 def reverse_complement(sequence):
@@ -373,19 +374,21 @@ def calculate_median_coverage(args, nor_nodes, original_graph:nx.DiGraph, cov, b
     """Calculate or use provided median unique coverage."""
     min_b = 1000000
     all_boundary = list(boundary_nodes.keys()) + list(boundary_nodes.values())
-
+    max_b = 0
     for source, sink in boundary_nodes.items():
         logging.info (f"Source: {node_mapper.node_id_to_name_safe(source)} coverage {cov[abs(source)]}")
         logging.info (f"Sink: {node_mapper.node_id_to_name_safe(sink)} coverage {cov[abs(sink)]}")
         min_b = min(min_b, cov[abs(source)])
         min_b = min(min_b, cov[abs(sink)])
+        max_b = max(max_b, cov[abs(source)])
+        max_b = max(max_b, cov[abs(sink)])
     if args.median_unique is not None:
         return [args.median_unique/GIVEN_MEDIAN_COVERAGE_VARIATION, args.median_unique * GIVEN_MEDIAN_COVERAGE_VARIATION]
     #calculated_median = calculate_median_unique_coverage(nor_nodes, original_graph, cov, min_b, node_mapper)
     #if calculated_median is not None:
     #    return [calculated_median/DETECTED_MEDIAN_COVERAGE_VARIATION, calculated_median* DETECTED_MEDIAN_COVERAGE_VARIATION]
     #else:
-    res = [min_b/DETECTED_MEDIAN_COVERAGE_VARIATION, min_b* DETECTED_MEDIAN_COVERAGE_VARIATION]
+    res = [min_b/DETECTED_LOW_MEDIAN_COVERAGE_VARIATION, max_b* DETECTED_HIGH_MEDIAN_COVERAGE_VARIATION]
     logging.info(f"Using coverage range based on boundary nodes {res}, you can provide a better estimate with --median-unique.")
     #logging.warning(f"Failed to calculate median unique coverage for tangle. Using coverage based on neighbours {res} but better provide it manually with--median-unique.")
     return res

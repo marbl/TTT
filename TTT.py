@@ -12,7 +12,7 @@ from src.node_id_mapper import NodeIdMapper
 from src.MIP_optimizer import MIPOptimizer
 from src.input_parsing import (
     parse_gfa, parse_gaf, read_tangle_nodes, get_oriented_boundaries, identify_tangle_nodes, read_coverage_file,
-    coverage_from_graph, verify_coverage, calculate_median_coverage, clean_tips
+    coverage_from_graph, verify_coverage, calculate_median_coverage, clean_tips, DETECTED_LOW_MEDIAN_COVERAGE_VARIATION, DETECTED_HIGH_MEDIAN_COVERAGE_VARIATION
 )
 from src.graph_transformation import (
     get_canonical_rc_vertex,
@@ -152,7 +152,7 @@ def main():
         used_or_nodes.add(boundary_nodes[b])
 
     median_unique_range = calculate_median_coverage(args, nor_nodes, original_graph, cov, boundary_nodes, node_id_mapper)
-    median_unique = math.sqrt(median_unique_range[0] * median_unique_range[1])
+    median_unique = (median_unique_range[0] * DETECTED_LOW_MEDIAN_COVERAGE_VARIATION)
     filtered_alignment_file = os.path.join(args.outdir, f"{args.basename}.q{args.quality_threshold}.used_alignments.gaf")
     alignments = parse_gaf(args.alignment, used_or_nodes, filtered_alignment_file, args.quality_threshold, node_id_mapper)
     alignment_scorer = AlignmentScorer(alignments)
@@ -160,7 +160,7 @@ def main():
     # TODO: instead of a_values we just use coverage
     mip_optimizer = MIPOptimizer(node_id_mapper)
     equations, nonzeros, a_values, boundary_values = mip_optimizer.generate_MIP_equations(tangle_nodes, nor_nodes, cov, median_unique, original_graph, boundary_nodes, directed=True)
-    best_solution = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range)
+    best_solution = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
     
     # Define output filenames based on the output directory
     output_csv = os.path.join(args.outdir, args.basename + ".multiplicities.csv")
