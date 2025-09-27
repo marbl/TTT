@@ -150,7 +150,8 @@ def main():
     for b in boundary_nodes:
         used_or_nodes.add(b)
         used_or_nodes.add(boundary_nodes[b])
-
+        used_or_nodes.add(-b)
+        used_or_nodes.add(-boundary_nodes[b])
     median_unique_range = calculate_median_coverage(args, nor_nodes, original_graph, cov, boundary_nodes, node_id_mapper)
     median_unique = (median_unique_range[0] * DETECTED_LOW_MEDIAN_COVERAGE_VARIATION)
     filtered_alignment_file = os.path.join(args.outdir, f"{args.basename}.q{args.quality_threshold}.used_alignments.gaf")

@@ -17,7 +17,7 @@ class AlignmentScorer:
         #from lexicographical minimum of (pattern, rc_pattern) to max
         self.rc_patterns = {}
         for idx, alignment in enumerate(alignments):
-            logging.debug(f"Adding alignment {idx}: {alignment}")
+            #logging.debug(f"Adding alignment {idx}: {alignment}")
             pattern_str = self.aln_to_string(alignment)
             rc_nodes = [-n for n in alignment]
             rc_nodes.reverse()
@@ -36,7 +36,9 @@ class AlignmentScorer:
                 self.rc_patterns[rc_pattern_str] = pattern_str   
             self.pattern_counts[pattern_str] += 1
             self.pattern_counts[rc_pattern_str] += 1
-
+        logging.info(f"{len(self.pattern_counts)} different alignment pattern used")
+        for pattern in self.pattern_counts:
+            logging.debug(f"Pattern: {pattern} Count: {self.pattern_counts[pattern]}")
         self.automaton.make_automaton()
         logging.debug(f"automaton keys {list(self.automaton.keys())}")
         logging.info(f"Built automaton with {len(self.pattern_counts)} unique alignment patterns")

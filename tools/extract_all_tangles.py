@@ -479,7 +479,7 @@ if __name__ == "__main__":
     node_id_mapper = NodeIdMapper()
     alignments = parse_alignment_file(alignment_file, node_id_mapper)
     
-    run_id = 6
+    run_id = 7
     
     #get_tangle_components(graph, coverage, alignments, node_id_mapper)
 

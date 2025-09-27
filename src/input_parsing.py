@@ -152,12 +152,15 @@ def filter_gaf_nodes(gaf_nodes, interesting_nodes) -> list[int]:
         start += 1
     while end >= start and gaf_nodes[end] not in interesting_nodes:
         end -= 1
+    if start > 0 or end < len(gaf_nodes) - 1:
+        logging.debug(f"Filtered nodes from {gaf_nodes} to {gaf_nodes[start:end+1]}")
     return gaf_nodes[start:end+1]
 
 def parse_gaf(gaf_file, interesting_nodes, filtered_file, quality_threshold, node_mapper):
     res = []
     if filtered_file:
         out_file = open(filtered_file, 'w')
+    logging.debug(f"Interesting nodes used for alignment {interesting_nodes}")
     with open(gaf_file, 'r') as file:
         for line in file:
             parts = line.strip().split()
