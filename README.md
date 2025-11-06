@@ -10,7 +10,7 @@ UNDER CONSTRUCTION!
 
 ### Example usage:
 ```bash
-./TTT.py --graph assembly.gfa --alignment reads.gaf --output results_dir --boundary-nodes boundary_nodes.tsv --quality-threshold 20
+./TTT.py --graph assembly.gfa --alignment reads.gaf --outdir results_dir --boundary-nodes boundary_nodes.tsv --quality-threshold 20
 ```
 
 <details>

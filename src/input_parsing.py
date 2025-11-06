@@ -441,8 +441,12 @@ def identify_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMap
     inside_node = path[1]
     original_component = nx.node_connected_component(indirect_graph, inside_node)
     for boundary_pair in boundary:
-        for boundary_node in boundary_pair:        
-            indirect_graph.remove_node(boundary_node)
+        for boundary_node in boundary_pair:   
+            if boundary_node in indirect_graph:    
+                indirect_graph.remove_node(boundary_node)
+            else:
+                logging.error(f"Boundary nodes do not identify a valid tangle. One node use more than once?")
+                exit(1)
     tangle_component = nx.node_connected_component(indirect_graph, inside_node)
     #TODO: incoming/outgoing check
     valid_tangle = True

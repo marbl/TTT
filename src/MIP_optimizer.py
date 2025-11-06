@@ -205,5 +205,6 @@ class MIPOptimizer:
                     if mult_value != "X" and rev_mult_value != "X":
                         mult_value = int(mult_value) + int(rev_mult_value)
                     cov_value = cov.get(node_id, "N/A")
-                    out_file.write(f"{self.node_mapper.node_id_to_name[node_id]}\t{cov_value}\t{mult_value}\n")
+    
+                    out_file.write(f"{self.node_mapper.node_id_to_name_safe(node_id)}\t{cov_value}\t{mult_value}\n")
         logging.info(f"Wrote multiplicity solutions to {output_file}")
