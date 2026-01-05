@@ -5,13 +5,23 @@ from .logging_utils import log_assert
 class NodeIdMapper:
     """Class to handle node ID to name mapping and vice versa."""
     #special case not to rename most of the nodes because of utig0
-    UTIG0 = 12339239
+    UTIG0 = 100000
     def __init__(self):
         # Map node ID to string node names (only positive ids, unoriented)
         self.node_id_to_name = {}
         self.name_to_node_id = {}
         self.last_enumerated_node = 0
-    
+
+    def node_id_to_unoriented_name(self, node_id):
+        """Convert node ID to unoriented name."""
+        node_id = abs(node_id)
+        if node_id in self.node_id_to_name:
+            return self.node_id_to_name[node_id]
+        else:
+            logging.error(f"Node ID {node_id} not found in name mapping.")
+            logging.error(f"map size: {len(self.node_id_to_name)}")
+            exit(1)
+
     def node_id_to_name_safe(self, node_id):
         """Safely convert node ID to name, handling cases where name might not exist"""
         if node_id > 0:
@@ -30,26 +40,29 @@ class NodeIdMapper:
         """Parse node string to get unique integer ID."""
         if node_str in self.name_to_node_id:
             return self.name_to_node_id[node_str]
-        
+        logging.debug(f"adding {node_str} last enum {self.last_enumerated_node }")
         parts = node_str.split('-')
         if len(parts) < 2 or not parts[1].isdigit():
             # ribotin graph case
             if node_str.isdigit():            
                 node_id = int(node_str)
             else:
-                self.last_enumerated_node += 1
-                node_id = self.last_enumerated_node
-                logging.debug(f"Assigned enumerated ID {node_id} to node {node_str}")
+                node_id = -1
+                logging.debug(f"non-digit node string: {node_str}")
         else:
             node_id = int(parts[1])
 
         # utig4-0 same as its RC
         if node_id == 0:
             node_id = self.UTIG0
-        elif node_id <= self.last_enumerated_node or node_id == self.UTIG0:
+        
+        if node_id <= self.last_enumerated_node:
             self.last_enumerated_node += 1
             node_id = self.last_enumerated_node
-            logging.debug(f"Assigned enumerated ID {node_id} to node {node_str}, utig4-0 special case")
+            
+        if node_id > self.last_enumerated_node:
+            self.last_enumerated_node = node_id
+        logging.debug(f"Assigned enumerated ID {node_id} to node {node_str}")
         
         self.node_id_to_name[node_id] = node_str
         self.name_to_node_id[node_str] = node_id
