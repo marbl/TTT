@@ -479,11 +479,11 @@ if __name__ == "__main__":
     node_id_mapper = NodeIdMapper()
     alignments = parse_alignment_file(alignment_file, node_id_mapper)
     
-    run_id = 7
+    run_id = 8
     
     #get_tangle_components(graph, coverage, alignments, node_id_mapper)
 
-    if True:
+    if False:
         for dir in os.listdir(BASE_SUBDIR):                
             boundary_file = os.path.join(os.getcwd(), BASE_SUBDIR, dir, "boundary.txt")
             if os.path.exists(boundary_file):
@@ -496,5 +496,5 @@ if __name__ == "__main__":
                 os.system(f"chmod +x {script_file}")
                 os.system(f"sbatch --time=3:00:00 --mem=40g --cpus-per-task=28 --partition=norm,quick {script_file}")
     #verify_alignments(alignments, node_id_mapper, f"TTT_{run_id}")
-    #realign_all_to_ref(graph_seq, REFERENCE, f"TTT_{run_id}")
-    #extract_all_res(f"TTT_{run_id}")
+    #realign_all_to_ref(graph_seq, REFERENCE, f"TTT_{run_id}") #Paralleled in lazy way, check that processes ended.
+    extract_all_res(f"TTT_{run_id}")

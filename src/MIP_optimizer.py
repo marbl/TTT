@@ -18,6 +18,21 @@ class MIPOptimizer:
         """
         self.node_mapper = node_mapper
     
+    def normalized_score(self, solution, coverages, lengths, median_unique):
+        total_deviation = 0
+        total_length = 0
+        for node_id in coverages:
+            if node_id in solution and node_id in lengths:
+                mult = solution[node_id] + solution.get(-node_id, 0)
+                deviation = abs(mult * median_unique - coverages[node_id])
+                length = lengths.get(node_id, 0)
+                total_deviation += deviation * length
+                total_length += length
+                logging.debug(f"Node {self.node_mapper.node_id_to_name_safe(node_id)}: Deviation = {deviation}, Length = {length}")
+        if total_length == 0:
+            return float('inf')
+        return total_deviation / (total_length * median_unique)
+
     def solve_MIP(self, equations, nonzeros, boundary_values, coverages, unique_coverage_range , original_graph):
         # last element in equation - amount of boundary nodes    
         #nonzeros = set()
@@ -87,7 +102,8 @@ class MIPOptimizer:
 
             # MIP magic
             pulp.LpSolverDefault.msg = 1
-            prob.solve()
+            prob.solve(pulp.GLPK(timeLimit=600))
+            
             result = {}    
             
             if pulp.LpStatus[prob.status] != "Optimal":
@@ -112,7 +128,9 @@ class MIPOptimizer:
                 detected_coverage = 1/pulp.value(inv_unique_coverage)
                 logging.info(f"Unique coverage for the best MIP solution {detected_coverage}, solution score {score}")
                 if abs(detected_coverage - unique_coverage_range[0]) < 0.01 or abs(detected_coverage - unique_coverage_range[1]) < 0.01:
-                    logging.info(f"Warning, detected best coverage is close to the allowed unique coverage borders{unique_coverage_range}")                                                                            
+                    logging.info(f"Warning, detected best coverage is close to the allowed unique coverage borders{unique_coverage_range}")  
+                normalized_score = self.normalized_score(result, coverages, lengths, detected_coverage)
+                logging.info(f"Normalized score of the MIP solution: {normalized_score}")                                                                          
                 return result
         logging.error("MIP did not find an optimal solution after all adjustment attempts.")
         exit(1)
@@ -205,6 +223,6 @@ class MIPOptimizer:
                     if mult_value != "X" and rev_mult_value != "X":
                         mult_value = int(mult_value) + int(rev_mult_value)
                     cov_value = cov.get(node_id, "N/A")
-    
-                    out_file.write(f"{self.node_mapper.node_id_to_name_safe(node_id)}\t{cov_value}\t{mult_value}\n")
+
+                    out_file.write(f"{self.node_mapper.node_id_to_unoriented_name(node_id)}\t{cov_value}\t{mult_value}\n")
         logging.info(f"Wrote multiplicity solutions to {output_file}")

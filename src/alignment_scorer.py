@@ -65,3 +65,24 @@ class AlignmentScorer:
             else:
                 score += self.pattern_counts[item] * 2
         return score
+    
+    def not_satisfied_fraction(self, path):
+        path_str = self.path_to_string(path)
+        found = set()
+        for item in self.automaton.iter(path_str):
+            pattern = item[1]
+            found.add(pattern)
+        not_satisfied = 0
+        total_reads = 0
+        found_reads = 0
+        used = set()
+        for pattern in self.pattern_counts:
+            if pattern in used:
+                continue
+            rc_pattern = self.rc_patterns[pattern]
+            if (pattern in found) or (rc_pattern in found):
+                found_reads += self.pattern_counts[pattern]
+            total_reads += self.pattern_counts[pattern]
+            used.add(pattern)
+            used.add(rc_pattern)
+        logging.info(f"Not found reads fraction : {(total_reads - found_reads) / total_reads if total_reads > 0 else 0}")

@@ -84,6 +84,8 @@ def optimize_paths(multi_graph, boundary_nodes, original_graph, num_initial_path
         # Output FASTA file
         logging.info(f"Writing best path to {output_fasta} and gaf to {output_gaf}")
         pathOptimizer.output_path(original_graph, output_fasta, output_gaf)
+        alignment_scorer.not_satisfied_fraction(best_path)
+        
     else:
         logging.error("No valid path found during optimization.")
     return best_path, best_score, best_optimizer
