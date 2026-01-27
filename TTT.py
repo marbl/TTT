@@ -140,8 +140,6 @@ def main():
     tangle_nodes, boundary_nodes = identify_tangle_nodes(args, original_graph, node_id_mapper)
     clean_tips(tangle_nodes, original_graph, node_id_mapper)
     nor_nodes = {abs(node) for node in tangle_nodes}
-    
-    
 
     used_nodes = nor_nodes.copy()
     for b in boundary_nodes:
@@ -158,7 +156,7 @@ def main():
     median_unique = (median_unique_range[0] * DETECTED_LOW_MEDIAN_COVERAGE_VARIATION)
     filtered_alignment_file = os.path.join(args.outdir, f"{args.basename}.q{args.quality_threshold}.used_alignments.gaf")
     alignments = parse_gaf(args.alignment, used_or_nodes, filtered_alignment_file, args.quality_threshold, node_id_mapper)
-    alignment_scorer = AlignmentScorer(alignments)
+    alignment_scorer = AlignmentScorer(alignments, original_graph, node_id_mapper)
     logging.info("Starting multiplicity counting...")
     # TODO: instead of a_values we just use coverage
     mip_optimizer = MIPOptimizer(node_id_mapper)

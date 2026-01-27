@@ -109,12 +109,11 @@ class MIPOptimizer:
             if pulp.LpStatus[prob.status] != "Optimal":
                 logging.warning("MIP did not find an optimal solution.")
                 if len (nonzeros) > 0:
-                    #score = pulp.value(objective)  
-                    #detected_coverage = 1/pulp.value(inv_unique_coverage)
-                    #logging.info(f"Unique coverage for the best MIP solution {detected_coverage}, solution score {score}")
-    
-                    logging.warning (f"Removing the constraint that forced to include {self.node_mapper.node_id_to_name_safe(nonzeros[-1])} cov {coverages[nonzeros[-1]]} into traversing paths")
-                    nonzeros.pop()
+                    #TODO: think about iterative removal strategy
+                    #logging.warning (f"Removing the constraint that forced to include {self.node_mapper.node_id_to_name_safe(nonzeros[-1])} cov {coverages[nonzeros[-1]]} into traversing paths")
+                    #nonzeros.pop()
+                    logging.warning("Removing all forced inclusions and retrying.")
+                    nonzeros = []
                     continue
                 else:
                     break

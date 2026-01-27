@@ -36,7 +36,6 @@ def parse_gfa(file_path, node_mapper) -> nx.DiGraph:
                 node_id = node_mapper.parse_node_id(parts[1])
                 node_mapper.add_mapping(node_id, parts[1])  # Map node ID to its string name
                 #node_mapper.node_id_to_name[-node_id] = '-' + parts[1]  # Map reverse complement
-
                 # Extract node length from LN:i:<length> or length of provided string
                 length = len(parts[2])
                 cov = -1
@@ -98,11 +97,11 @@ def parse_gfa(file_path, node_mapper) -> nx.DiGraph:
                         for e in end_nodes:
                             if rc_node(n1) in original_graph.successors(rc_node(e)):
                                 overlap_sizes = []
-                                overlap_sizes.append(original_graph[start_node][e].get('overlap', 0))
+                                '''overlap_sizes.append(original_graph[start_node][e].get('overlap', 0))
                                 overlap_sizes.append(original_graph[rc_node(e)][rc_node(n1)].get('overlap', 0))
                                 overlap_sizes.append(original_graph[n1][n2].get('overlap', 0))
-                                min_overlap = min(overlap_sizes) if overlap_sizes else 0
-                                original_graph.add_edge(start_node, n2, overlap=min_overlap)
+                                min_overlap = min(overlap_sizes) if overlap_sizes else 0'''
+                                original_graph.add_edge(start_node, n2, overlap=-1)
                                 logging.debug(f"Non-transitive junction! Adding {node_mapper.node_id_to_name_safe(start_node)} -> {node_mapper.node_id_to_name_safe(n2)}, overlap {min_overlap}")
                                 non_transitive_junctions += 1
                                 overlap_counted = True
