@@ -25,8 +25,8 @@ cov_variation = 1.5
 len_variation = 1.5
 component_length_threshold = 1000000
 path_node_count_threshold = 20
-definitely_not_tangle = 1000000
 MAX_TIP_LENGTH = 30000
+MAX_TANGLE_SIZE = 5000000
 
 BASE_SUBDIR = "tangles"
 
@@ -192,6 +192,7 @@ def get_tangle_components(gfa_file, coverage_file, alignments, node_id_mapper):
                     if not neighbor in tangle and not neighbor in nodes_between_tangles:
                         tangle.add(neighbor)
                         added = True
+
         #Removing long tips from tangle
         tips = set()
         for node in tangle:
@@ -210,6 +211,11 @@ def get_tangle_components(gfa_file, coverage_file, alignments, node_id_mapper):
             for neighbor in hifi_graph.predecessors(node):
                 if not (neighbor in tangle):
                     neighbors.add(neighbor)
+        
+        tangle_length = sum(hifi_graph.nodes[node]['length'] for node in tangle)
+        if tangle_length > MAX_TANGLE_SIZE:
+            logging.info (f"Skipping too large tangle of length {tangle_length}")
+            continue
         
         filtered_neighbors = set()
         valid_tangle = True

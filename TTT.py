@@ -116,6 +116,7 @@ def parse_arguments():
     
     if args.verkko_output: 
         args.coverage = os.path.join(args.verkko_output, "2-processGraph", "unitig-unrolled-hifi-resolved.ont-coverage.csv")
+        args.alt_coverage = os.path.join(args.verkko_output, "2-processGraph", "unitig-unrolled-hifi-resolved.hifi-coverage.csv")
         args.graph = os.path.join(args.verkko_output, "2-processGraph", "unitig-unrolled-hifi-resolved.gfa")
         args.alignment = os.path.join(args.verkko_output, "3-align", "alns-ont.gaf")
     return args
