@@ -11,7 +11,7 @@ from src.logging_utils import setup_logging
 from src.node_id_mapper import NodeIdMapper
 from src.MIP_optimizer import MIPOptimizer
 from src.input_parsing import (
-    parse_gfa, parse_gaf, read_tangle_nodes, get_oriented_boundaries, identify_tangle_nodes, read_coverage_file,
+    parse_gfa, parse_gaf, read_tangle_nodes, get_oriented_boundaries, identify_tangle_nodes, new_identify_tangle_nodes, read_coverage_file,
     coverage_from_graph, verify_coverage, calculate_median_coverage, clean_tips, DETECTED_LOW_MEDIAN_COVERAGE_VARIATION, DETECTED_HIGH_MEDIAN_COVERAGE_VARIATION
 )
 from src.graph_transformation import (
@@ -119,6 +119,8 @@ def parse_arguments():
         args.alt_coverage = os.path.join(args.verkko_output, "2-processGraph", "unitig-unrolled-hifi-resolved.hifi-coverage.csv")
         args.graph = os.path.join(args.verkko_output, "2-processGraph", "unitig-unrolled-hifi-resolved.gfa")
         args.alignment = os.path.join(args.verkko_output, "3-align", "alns-ont.gaf")
+    else: 
+        args.alt_coverage = None
     return args
 
 def main():    
@@ -134,14 +136,27 @@ def main():
         cov = read_coverage_file(args.coverage, node_id_mapper)
     else:
         cov = coverage_from_graph(original_graph)
+
+    if args.alt_coverage:
+        alt_cov = read_coverage_file(args.alt_coverage, node_id_mapper)
+        verify_coverage(alt_cov, original_graph, node_id_mapper)
     # Verifying that coverage matches the graph
     # For rare cases coverage may be missing for some nodes, will update with median then 
     verify_coverage(cov, original_graph, node_id_mapper)
     #boundary nodes: map from incoming to outgoing
-    tangle_nodes, boundary_nodes = identify_tangle_nodes(args, original_graph, node_id_mapper)
-    clean_tips(tangle_nodes, original_graph, node_id_mapper)
-    nor_nodes = {abs(node) for node in tangle_nodes}
 
+    # Here all sequence is stored in edges, junctions are new vertices
+    dual_graph = create_dual_graph(original_graph, node_id_mapper)
+
+    tangle_nodes, boundary_nodes = new_identify_tangle_nodes(args, original_graph, dual_graph, node_id_mapper)
+    #tangle_nodes_old, boundary_nodes_old = identify_tangle_nodes(args, original_graph, node_id_mapper)
+    #if len(tangle_nodes) != len(tangle_nodes_old):
+    #    logging.warning(f"Different number of tangle nodes (with rc) identified by new and old methods: {len(tangle_nodes)} vs {len(tangle_nodes_old)}")
+    #TODO: do all operations on dual graph        
+    clean_tips(tangle_nodes, original_graph, node_id_mapper)
+    dual_graph = create_dual_graph(original_graph, node_id_mapper)
+    nor_nodes = {abs(node) for node in tangle_nodes}
+    
     used_nodes = nor_nodes.copy()
     for b in boundary_nodes:
         used_nodes.add(abs(b))
@@ -162,8 +177,19 @@ def main():
     # TODO: instead of a_values we just use coverage
     mip_optimizer = MIPOptimizer(node_id_mapper)
     equations, nonzeros, a_values, boundary_values = mip_optimizer.generate_MIP_equations(tangle_nodes, nor_nodes, cov, median_unique, original_graph, boundary_nodes, directed=True)
-    best_solution = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
-    
+    best_solution, score = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
+    if score > 0.2 and args.alt_coverage != None:
+        logging.info(f"High MIP score {score}, trying to re-calculate coverage from alternative (hifi) coverage file {args.alt_coverage}")
+        median_unique_range = calculate_median_coverage(args, nor_nodes, original_graph, alt_cov, boundary_nodes, node_id_mapper)
+        median_unique = (median_unique_range[0] * DETECTED_LOW_MEDIAN_COVERAGE_VARIATION)
+        equations, nonzeros, a_values, boundary_values = mip_optimizer.generate_MIP_equations(tangle_nodes, nor_nodes, alt_cov, median_unique, original_graph, boundary_nodes, directed=True)
+        best_solution_hifi, score_hifi = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
+        if score_hifi * 1.2 < score:
+            logging.info(f"Alternative coverage produced better MIP score {score_hifi} vs {score}, using it")
+            best_solution = best_solution_hifi.copy()
+            score = score_hifi
+        else:
+            logging.info(f"Alternative coverage did not significantly improve MIP score {score_hifi} vs {score}, keeping original (ONT)")
     # Define output filenames based on the output directory
     output_csv = os.path.join(args.outdir, args.basename + ".multiplicities.csv")
     output_fasta = os.path.join(args.outdir, args.basename + ".hpc.fasta")
@@ -171,8 +197,7 @@ def main():
 
     mip_optimizer.write_multiplicities(output_csv, best_solution, cov)
 
-    # Now all sequence is stored in edges, junctions are new vertices
-    dual_graph = create_dual_graph(original_graph, node_id_mapper)
+    #Splitting edges according to multiplicities
     multi_graph = create_multi_dual_graph(dual_graph, best_solution, tangle_nodes, boundary_nodes, original_graph, node_id_mapper)
 
     optimize_paths(multi_graph, boundary_nodes, original_graph, args.num_initial_paths, args.max_iterations, args.early_stopping_limit, alignment_scorer, output_fasta, output_gaf)

@@ -97,12 +97,13 @@ class MIPOptimizer:
             logging.debug(f"Objective: {prob.objective}")
             for constraint in prob.constraints.values():
                 logging.debug(f"Constraint: {constraint}")
-            for var in x_vars.values():
-                logging.debug(f"Variable: {var.name}, LowBound: {var.lowBound}, Cat: {var.cat}")
+            for var in prob.variables():
+                logging.debug(f"Variable: {var.name}, LowBound: {var.lowBound}, UpBound: {var.upBound}, Cat: {var.cat}")
 
             # MIP magic
             pulp.LpSolverDefault.msg = 1
-            prob.solve(pulp.GLPK(timeLimit=600))
+            # No more than 1 hour
+            prob.solve(pulp.GLPK(timeLimit=3600))
             
             result = {}    
             
@@ -130,7 +131,7 @@ class MIPOptimizer:
                     logging.info(f"Warning, detected best coverage is close to the allowed unique coverage borders{unique_coverage_range}")  
                 normalized_score = self.normalized_score(result, coverages, lengths, detected_coverage)
                 logging.info(f"Normalized score of the MIP solution: {normalized_score}")                                                                          
-                return result
+                return result, normalized_score
         logging.error("MIP did not find an optimal solution after all adjustment attempts.")
         exit(1)
 

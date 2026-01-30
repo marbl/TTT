@@ -8,6 +8,7 @@ import logging
 import networkx as nx
 from .logging_utils import log_assert
 from .node_id_mapper import NodeIdMapper
+from .graph_transformation import get_canonical_nodepair, create_dual_graph
 
 #allowed median coverage range in range [median_unique/MEDIAN_COVERAGE_VARIATION, median_unique * MEDIAN_COVERAGE_VARIATION]
 DETECTED_LOW_MEDIAN_COVERAGE_VARIATION = 2.0
@@ -102,7 +103,7 @@ def parse_gfa(file_path, node_mapper) -> nx.DiGraph:
                                 overlap_sizes.append(original_graph[n1][n2].get('overlap', 0))
                                 min_overlap = min(overlap_sizes) if overlap_sizes else 0'''
                                 original_graph.add_edge(start_node, n2, overlap=-1)
-                                logging.debug(f"Non-transitive junction! Adding {node_mapper.node_id_to_name_safe(start_node)} -> {node_mapper.node_id_to_name_safe(n2)}, overlap {min_overlap}")
+                                logging.debug(f"Non-transitive junction! Adding {node_mapper.node_id_to_name_safe(start_node)} -> {node_mapper.node_id_to_name_safe(n2)}, overlap {-1}")
                                 non_transitive_junctions += 1
                                 overlap_counted = True
                                 break
@@ -112,15 +113,37 @@ def parse_gfa(file_path, node_mapper) -> nx.DiGraph:
     logging.info(f"Tuned non-transitive junctions: {non_transitive_junctions}")
     return original_graph
 
-def get_nonoriented_graph(directed_graph:nx.DiGraph) -> nx.Graph:
+def get_nonoriented_graph(directed_graph:nx.DiGraph) -> nx.MultiGraph:
     #no negative ids
-    res = nx.Graph()
+    res = nx.MultiGraph()
     for node in directed_graph.nodes():
         if node < 0:
             continue
         res.add_node(node, **directed_graph.nodes[node])
     for u, v in directed_graph.edges():
        res.add_edge(abs(u), abs(v), mid_length = directed_graph.nodes[u].get('length', 0) + directed_graph.nodes[v].get('length', 0))
+    return res
+
+def get_undirected_dual_vertex (u, v):
+    if isinstance(u, int):
+        newu = abs(u)
+    else:
+        newu = u
+    if isinstance(v, int):
+        newv = abs(v)
+    else:
+        newv = v
+
+    return (newu, newv)
+
+def get_nonoriented_dual_graph(directed_dual_graph:nx.DiGraph, node_mapper:NodeIdMapper) -> nx.MultiGraph:
+    res = nx.MultiGraph()
+    for node in directed_dual_graph.nodes():
+        res.add_node(get_undirected_dual_vertex(node[0], node[1]), **directed_dual_graph.nodes[node])
+    for u, v, data in directed_dual_graph.edges(data=True):
+        u_canon = get_undirected_dual_vertex(u[0], u[1])
+        v_canon = get_undirected_dual_vertex(v[0], v[1])
+        res.add_edge(u_canon, v_canon, **data)
     return res
 
 def parse_gaf_string (gaf_string, node_mapper) -> list[int]:
@@ -444,7 +467,7 @@ def identify_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMap
             if boundary_node in indirect_graph:    
                 indirect_graph.remove_node(boundary_node)
             else:
-                logging.error(f"Boundary nodes do not identify a valid tangle. One node use more than once?")
+                logging.error(f"Boundary nodes do not identify a valid tangle. One boundary node used more than once?")
                 exit(1)
     tangle_component = nx.node_connected_component(indirect_graph, inside_node)
     #TODO: incoming/outgoing check
@@ -487,6 +510,136 @@ def identify_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMap
             node2 = -node2  
         boundary_map[node1] = node2
     return tangle_nodes, boundary_map
+
+        
+def new_identify_tangle_nodes(args, original_graph:nx.DiGraph, dual_graph:nx.DiGraph, node_mapper:NodeIdMapper):
+    boundary = []
+    for line in open(args.boundary_nodes):
+        # Parse the line and extract boundary node pairs
+        # map incoming->matching outgoing
+        parts = line.strip().split()
+        if len(parts) == 0:
+            continue
+        log_assert(len(parts) == 2, f"Expected 2 nodes per line in boundary nodes file, got {len(parts)} in line: {line.strip()}")
+        if len(parts) == 2:
+            node1 = node_mapper.parse_node_id(parts[0])
+            node2 = node_mapper.parse_node_id(parts[1])
+            log_assert(node1 in original_graph.nodes(), f"Boundary node {node_mapper.node_id_to_name_safe(node1)} not found in the provided graph {args.graph} ")
+            log_assert(node2 in original_graph.nodes(), f"Boundary node {node_mapper.node_id_to_name_safe(node2)} not found in the provided graph {args.graph} ")
+            boundary.append([node1, node2])
+    log_assert(len(boundary) >=1 and len(boundary) <= 2, f"Expected 1 or 2 pairs of boundary nodes, got {len(boundary)}")    
+
+    indirect_graph = get_nonoriented_graph(original_graph)    
+    indirect_dual_graph = get_nonoriented_dual_graph(dual_graph, node_mapper)
+    #all nodes have positive ids in both indirect graphs
+
+    #we want paths to be collinear, so sometimes will initiate swaps within the pair
+    #TODO: likely not needed after inverted swaps introduction
+    if len (boundary) == 2:
+        dists = [[],[]]
+        logging.debug("Checking pairwise unoriented distances between boundary nodes")
+        for i in range (2):
+            for j in range(2):
+                dists[i].append(nx.shortest_path_length(indirect_graph, boundary[0][i], boundary[1][j],  weight='mid_length') - original_graph.nodes[boundary[0][i]].get('length', 0) - original_graph.nodes[boundary[1][j]].get('length', 0))
+        logging.debug(f"unoriented distances between borders {dists}")
+        if dists[0][0] < dists[0][1] and dists[1][1] < dists[1][0]:
+            logging.debug(f"Distances look fine")
+        elif dists[0][0] > dists[0][1] and dists[1][1] > dists[1][0]:
+            logging.debug(f"Swapping boundary nodes for better collinearity")
+            boundary[1] = boundary[1][::-1]
+        else:
+            logging.debug(f"Boundary node pairs do not allow to detecte collinear paths")
+    found_internal = False
+
+    source_name = node_mapper.node_id_to_name_safe(boundary[0][0])
+    sink_name = node_mapper.node_id_to_name_safe(boundary[0][1])
+    distance, path = nx.single_source_dijkstra(indirect_graph, boundary[0][0], boundary[0][1], weight='mid_length')
+    if len(path) >= 2:
+        inside_vertex = 0
+        found_internal = False
+        for v in indirect_dual_graph.nodes():
+            for x, e1, edge_data1 in indirect_dual_graph.edges(v, data=True):
+                for y, e2, edge_data2 in indirect_dual_graph.edges(v, data=True):
+                    #logging.info(f"edge_data1: {edge_data1} edge_data2: {edge_data2}" )
+                    if abs(edge_data1['original_node']) == abs(path[0]) and abs(edge_data2['original_node']) == abs(path[1]):
+                        inside_vertex = v
+                        found_internal = True
+                        break
+        log_assert(found_internal, f"Failed to find inside vertex in dual graph for path between {source_name} and {sink_name}")
+        log_assert(inside_vertex in indirect_dual_graph.nodes(), f"Expected to find inside vertex in dual graph for path between {source_name} and {sink_name}")
+       
+    else:
+        logging.error(f"Failed to identify tangle. Are boundary nodes {source_name} and {sink_name} connected?")
+        exit(1)
+
+    original_component = nx.node_connected_component(indirect_dual_graph, inside_vertex)
+    node_ids_to_remove = []
+    for boundary_pair in boundary:
+        for boundary_node in boundary_pair:   
+            node_ids_to_remove.append(boundary_node)
+            if boundary_node in indirect_graph:
+                indirect_graph.remove_node(boundary_node)
+            else:
+                logging.error(f"Boundary nodes do not identify a valid tangle. One boundary node used more than once?")
+                exit(1)
+    edges_to_remove = []
+    for u, v, edge_data in indirect_dual_graph.edges(data =True):
+        if abs(edge_data['original_node']) in node_ids_to_remove:
+            edges_to_remove.append((u, v))
+    for u, v in edges_to_remove:
+        if indirect_dual_graph.has_edge(u, v):
+            indirect_dual_graph.remove_edge(u, v)
+
+                
+            
+    dual_tangle_component = nx.node_connected_component(indirect_dual_graph, inside_vertex)
+    tangle_component = set()
+    for u in dual_tangle_component:
+        for _, v, edge_data in indirect_dual_graph.edges(u, data =True):
+            if v not in dual_tangle_component:
+                continue       
+            unoriented_node_id = abs(edge_data['original_node'])
+            tangle_component.add(unoriented_node_id)            
+    logging.info(f"Total {len(tangle_component)} tangle nodes in connected component")
+    valid_tangle = True
+    for boundary_pair in boundary:
+        for boundary_node in boundary_pair:       
+            for pred in original_graph.predecessors(boundary_node):
+                for succ in original_graph.successors(boundary_node):
+                    if abs(pred) in tangle_component and abs(succ) in tangle_component:
+                        logging.error(f"Boundary nodes do not separate incoming and outgoing nodes for {node_mapper.node_id_to_name_safe(boundary_node)}, fix the boundary nodes")
+                        exit(1)
+    log_assert(len(dual_tangle_component) < len(original_component), f"Boundary nodes do not isolate tangle from the rest of the component!!!")        
+    logging.info (f"Original component size: {len(original_component)} vertices, tangle component size: {len(dual_tangle_component)} vertices, Tangle size: {len(tangle_component)} gfa nodes")
+    tangle_nodes = set()
+    for node in tangle_component:
+        tangle_nodes.add(node)
+        tangle_nodes.add(rc_node(node))
+    boundary_map = {}
+    for i in range(len(boundary)):
+        node1 = boundary[i][0]
+        is_incoming = False
+        for next_node in original_graph.successors(node1):
+            if next_node in tangle_nodes:
+                is_incoming = True
+                break
+        if not is_incoming:
+            node1 = -node1
+        node2 = boundary[i][1]
+        is_outgoing = False
+        for prev in original_graph.predecessors(node2):
+            if prev in tangle_nodes:
+                is_outgoing = True
+                break
+        if not is_outgoing:
+            node2 = -node2  
+        boundary_map[node1] = node2
+        if not nx.has_path(original_graph, node1, node2):
+            logging.error(f"Boundary nodes {node_mapper.node_id_to_name_safe(node1)} and {node_mapper.node_id_to_name_safe(node2)} are not connected in the directed graph, fix the boundary nodes")
+            exit(1)
+    return tangle_nodes, boundary_map
+
+
 
 
 def get_oriented_boundaries(args, original_graph:nx.DiGraph, tangle_nodes, node_mapper:NodeIdMapper):

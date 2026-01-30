@@ -26,7 +26,7 @@ len_variation = 1.5
 component_length_threshold = 1000000
 path_node_count_threshold = 20
 MAX_TIP_LENGTH = 30000
-MAX_TANGLE_SIZE = 5000000
+MAX_TANGLE_SIZE = 10000000
 
 BASE_SUBDIR = "tangles"
 
@@ -85,7 +85,7 @@ def parse_alignment_file(alignment_file, node_id_mapper):
 def get_tangle_components(gfa_file, coverage_file, alignments, node_id_mapper):
     hifi_graph = src.input_parsing.parse_gfa(gfa_file, node_id_mapper)
     coverage_data = src.input_parsing.read_coverage_file(coverage_file, node_id_mapper)
-
+    size_filtered_tangles = 0
     total_len = 0
     covs = []
     for node in hifi_graph.nodes:
@@ -212,10 +212,7 @@ def get_tangle_components(gfa_file, coverage_file, alignments, node_id_mapper):
                 if not (neighbor in tangle):
                     neighbors.add(neighbor)
         
-        tangle_length = sum(hifi_graph.nodes[node]['length'] for node in tangle)
-        if tangle_length > MAX_TANGLE_SIZE:
-            logging.info (f"Skipping too large tangle of length {tangle_length}")
-            continue
+  
         
         filtered_neighbors = set()
         valid_tangle = True
@@ -253,8 +250,16 @@ def get_tangle_components(gfa_file, coverage_file, alignments, node_id_mapper):
                     valid_tangle = False
                     break
         local_count = len(filtered_neighbors)
-        neighbor_count[len(filtered_neighbors)] = neighbor_count.get(len(filtered_neighbors), 0) + 1
+        #neighbor_count[len(filtered_neighbors)] = neighbor_count.get(len(filtered_neighbors), 0) + 1
+        tangle_length = sum(hifi_graph.nodes[node]['length'] for node in tangle)
+        if tangle_length > MAX_TANGLE_SIZE and (local_count == 2 or local_count == 4):
+            logging.info (f"Skipping too large tangle of length {tangle_length}, neighbors {local_count} {','.join([node_id_mapper.node_id_to_name_safe(node) for node in filtered_neighbors])}")
+            
+            size_filtered_tangles += 1
+            continue
         if valid_tangle:
+            #        neighbor_count[len(filtered_neighbors)] = neighbor_count.get(len(filtered_neighbors), 0) + 1
+            neighbor_count[len(filtered_neighbors)] = neighbor_count.get(len(filtered_neighbors), 0) + 1
             cur_dir = os.path.join(basedir, f"tangle_{valid_tangle_count}")
             os.makedirs(cur_dir, exist_ok=True)
             res_file = os.path.join(cur_dir, f"boundary.txt")
@@ -303,7 +308,8 @@ def get_tangle_components(gfa_file, coverage_file, alignments, node_id_mapper):
     ssum = 0
     for i in range (0,20):
         logging.info (f"Tangles with {i} connections: {neighbor_count.get(i,0)}")
-        ssum += neighbor_count.get(i,0)        
+        ssum += neighbor_count.get(i,0)      
+    logging.info (f"Size filtered tangles: {size_filtered_tangles}")  
     logging.info(f"Total tangles detected: {ssum}")
 
 
@@ -485,7 +491,7 @@ if __name__ == "__main__":
     node_id_mapper = NodeIdMapper()
     alignments = parse_alignment_file(alignment_file, node_id_mapper)
     
-    run_id = 8
+    run_id = 10
     
     #get_tangle_components(graph, coverage, alignments, node_id_mapper)
 
