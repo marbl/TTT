@@ -6,6 +6,20 @@ import os
 import subprocess
 
 
+class WarningCollectorHandler(logging.Handler):
+    """Custom handler to collect WARNING and above messages for end-of-program summary."""
+    def __init__(self):
+        super().__init__()
+        self.messages = []
+    
+    def emit(self, record):
+        msg = self.format(record)
+        self.messages.append(msg)
+    
+    def get_messages(self):
+        return self.messages
+
+
 def setup_logging(args):
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
     # Configure logging with runtime from program start
@@ -59,6 +73,12 @@ def setup_logging(args):
     console_handler.setLevel(logging.INFO)
     root_logger.addHandler(console_handler)
     
+    # Warning collector handler (for end-of-program summary)
+    warning_handler = WarningCollectorHandler()
+    warning_handler.setFormatter(RuntimeFormatter(log_format, datefmt=datefmt, start_time=start_time))
+    warning_handler.setLevel(logging.WARNING)
+    root_logger.addHandler(warning_handler)
+    
     # Log the GitHub commit hash if available
     try:
         commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=sys.path[0]).strip().decode('utf-8')
@@ -69,6 +89,32 @@ def setup_logging(args):
     # Log the command-line arguments
     logging.info(f"Command-line arguments: {' '.join(sys.argv)}")
     logging.info(f"Logging to file: {log_file}")
+
+
+def print_warnings_summary(args):
+    """Print all collected warnings at the end of the program."""
+    log_file = os.path.join(args.outdir, f"{args.basename}.log")
+
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if isinstance(handler, WarningCollectorHandler):
+            messages = handler.get_messages()
+            if messages:
+                with open(log_file, "a") as f:
+                    print("\n" + "="*80, file=f)
+                    print("WARNINGS SUMMARY:", file=f)
+                    print("="*80, file=f)
+                    for msg in messages:
+                        print(msg, file=f)
+                print("="*80 + "\n", file=sys.stderr)
+                print("\n" + "="*80, file=sys.stderr)
+                print("WARNINGS SUMMARY:", file=sys.stderr)
+                print("="*80, file=sys.stderr)
+                for msg in messages:
+                    print(msg, file=sys.stderr)
+                print("="*80 + "\n", file=sys.stderr)
+                    
+            break
 
 
 def log_assert(condition, message, logger=None):

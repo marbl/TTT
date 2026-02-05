@@ -7,7 +7,7 @@ import os
 from src.path_optimizer import PathOptimizer
 from src.path_supplementary import get_gaf_string
 from src.alignment_scorer import AlignmentScorer
-from src.logging_utils import setup_logging
+from src.logging_utils import setup_logging, print_warnings_summary
 from src.node_id_mapper import NodeIdMapper
 from src.MIP_optimizer import MIPOptimizer
 from src.input_parsing import (
@@ -22,7 +22,6 @@ from src.graph_transformation import (
 
 # Create global instances
 node_id_mapper = NodeIdMapper()
-mip_optimizer = MIPOptimizer(node_id_mapper)
 
 def optimize_paths(multi_graph, boundary_nodes, original_graph, num_initial_paths, max_iterations, early_stopping_limit, alignment_scorer: AlignmentScorer, output_fasta, output_gaf):
     """Optimize Eulerian paths."""
@@ -108,6 +107,7 @@ def parse_arguments():
     parser.add_argument("--early-stopping-limit", type=int, default=15000, help="Early stopping limit for optimization (default: 15000).")
     parser.add_argument("--quality-threshold", type=int, default=20, help="Alignments with quality less than this will be filtered out, default 20")
     parser.add_argument("--basename", required=False, default="traversal", type=str, help="Basename for most of the output files, default `traversal`")
+    parser.add_argument("--time-limit", type=int, default=3600, help="Time limit for MILP solver in seconds (default: 3600 seconds = 1 hour).")
     args = parser.parse_args()
     if not args.verkko_output  and (not args.graph  or not args.alignment ):
         #logging not initialized yet
@@ -175,7 +175,7 @@ def main():
     alignment_scorer = AlignmentScorer(alignments, original_graph, node_id_mapper)
     logging.info("Starting multiplicity counting...")
     # TODO: instead of a_values we just use coverage
-    mip_optimizer = MIPOptimizer(node_id_mapper)
+    mip_optimizer = MIPOptimizer(node_id_mapper, time_limit=args.time_limit)
     equations, nonzeros, a_values, boundary_values = mip_optimizer.generate_MIP_equations(tangle_nodes, nor_nodes, cov, median_unique, original_graph, boundary_nodes, directed=True)
     best_solution, score = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
     if score > 0.2 and args.alt_coverage != None:
@@ -201,7 +201,8 @@ def main():
     multi_graph = create_multi_dual_graph(dual_graph, best_solution, tangle_nodes, boundary_nodes, original_graph, node_id_mapper)
 
     optimize_paths(multi_graph, boundary_nodes, original_graph, args.num_initial_paths, args.max_iterations, args.early_stopping_limit, alignment_scorer, output_fasta, output_gaf)
-
+    
+    print_warnings_summary(args)
 
 if __name__ == "__main__":
     main()

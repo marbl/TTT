@@ -322,6 +322,7 @@ def verify_alignment(alignments, node_id_mapper, outdir):
     alignment_id = 0
     strings_to_output = []
     for_reeval = False
+    
     for line in open(res_gaf_file):
         gaf_str = line.strip().split('\t')[1]
         alignment = src.input_parsing.parse_gaf_string(gaf_str, node_id_mapper)
@@ -507,6 +508,6 @@ if __name__ == "__main__":
                     f.write(f"{TTT_runstr}\n")
                 os.system(f"chmod +x {script_file}")
                 os.system(f"sbatch --time=3:00:00 --mem=40g --cpus-per-task=28 --partition=norm,quick {script_file}")
-    #verify_alignments(alignments, node_id_mapper, f"TTT_{run_id}")
-    #realign_all_to_ref(graph_seq, REFERENCE, f"TTT_{run_id}") #Paralleled in lazy way, check that processes ended.
-    extract_all_res(f"TTT_{run_id}")
+    verify_alignments(alignments, node_id_mapper, f"TTT_{run_id}")
+    realign_all_to_ref(graph_seq, REFERENCE, f"TTT_{run_id}") #Paralleled in lazy way, check that processes ended.
+    #extract_all_res(f"TTT_{run_id}")

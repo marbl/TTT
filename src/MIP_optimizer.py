@@ -9,7 +9,7 @@ class MIPOptimizer:
 
     ALWAYS_INCLUDE_COVERAGE_FRACTION = 0.7
 
-    def __init__(self, node_mapper):
+    def __init__(self, node_mapper, time_limit):
         """
         Initialize the MIP optimizer with a node mapper.
         
@@ -17,6 +17,7 @@ class MIPOptimizer:
             node_mapper: NodeIdMapper instance for converting between node IDs and names
         """
         self.node_mapper = node_mapper
+        self.time_limit = time_limit
     
     def normalized_score(self, solution, coverages, lengths, median_unique):
         total_deviation = 0
@@ -103,7 +104,7 @@ class MIPOptimizer:
             # MIP magic
             pulp.LpSolverDefault.msg = 1
             # No more than 1 hour
-            prob.solve(pulp.GLPK(timeLimit=3600))
+            prob.solve(pulp.GLPK(timeLimit=self.time_limit))
             
             result = {}    
             

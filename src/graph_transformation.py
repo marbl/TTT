@@ -159,6 +159,7 @@ def get_traversable_subgraph(multi_dual_graph: nx.MultiDiGraph, border_nodes, or
     """
     Supplementary for Euler path search - search itself moved to path_optimizer.py
     """
+    #we may have some disconnected cycles in reverse-complement tangle, reversing them.
     start_vertices = []
     end_vertices = []
     for n in border_nodes:
@@ -223,6 +224,26 @@ def get_traversable_subgraph(multi_dual_graph: nx.MultiDiGraph, border_nodes, or
     logging.debug(f"After transformation")
     for e in multi_dual_graph.edges(keys=True):
         logging.debug(f"Edge {e}")
-    log_assert(len(unreachable_edges) == 0, f"Unreachable edges are still present: {unreachable_edges}")
+
+    #finding unreachable edges again
+    reachable_verts = nx.descendants(multi_dual_graph, start_vertex)
+    # Add the start_node itself
+    reachable_verts.add(start_vertex)
+    unreachable_verts = set(multi_dual_graph.nodes()) - reachable_verts
+    unreachable_edges.clear()
+    for e in multi_dual_graph.edges(keys=True):
+        if e[0] in unreachable_verts:
+            unreachable_edges.add(e)
+
+    if (len(unreachable_edges) != 0):
+        logging.warning(f"{len(unreachable_edges)} unreachable edges with nonzero multiplicities remains. They will be ignored in path finding.")
+        logging.warning(f"This happens when after removal of edges with estimated multiplicity 0 some cycles of positive multiplicity are disconnected from the main graph component. Usually this indicates problems with graph structure or really uneven coverage")        
+        out_str = "Unreachable edges: "
+        for e in unreachable_edges:                    
+            data = multi_dual_graph.get_edge_data(e[0], e[1], key=e[2])
+            out_str += f"{node_mapper.node_id_to_name_safe(data['original_node'])} "
+            multi_dual_graph.remove_edge(e[0], e[1], key = e[2])
+        logging.warning(out_str)
+
     reachable_subgraph = multi_dual_graph.subgraph(reachable_verts)
     return reachable_subgraph, start_vertex
