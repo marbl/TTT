@@ -1,4 +1,4 @@
-TTT stands for Trivial Tangle Traverser. This tool generates "not terrible" traversals through repetitive genomic tangles that somehow matches coverage and the read alignment.
+TTT stands for Trivial Tangle Traverser. This tool generates "not terrible" traversals(model sequences) through repetitive genomic tangles that somehow matches coverage and the read alignment.
 
 For help run `./TTT.py --help`
 
@@ -88,7 +88,7 @@ Currently TTT does not support tangles with more than 2 traversing paths (i.e. m
 TTT outputs two files to the `<outdir>` &mdash; `traversal.multiplicities.csv` with estimated multiplicities of tangle nodes (can be used with Bandage); `traversal.gaf` with the resulting path and, if graph .gfa file contained node sequences &mdash; `traversal.hpc.fasta` with a patch sequence. However, when combined with verkko (since verkko's graph is based on homopolymer-compressed sequences), this patch is also homopolymer compressed. To get non-hpc sequence you'll need to rerun verkko providing `traversal.gaf` with `--path` option &mdash; see <a href="https://github.com/marbl/verkko?tab=readme-ov-file#consensus-for-user-provided-paths"> verkko's manual </a> for details.
 
 ### Verkko's final graph coverage fix
-In verkko up to (and including )v2.2.1 coverage of the short nodes in tangles in final graph (assembly.homopolymer-compressed.gfa) is deeply flawed. Currently suggested way is to run TTT.py on the same tangle in hifi-only graph (`2-processGraph/unitig-unrolled-hifi-resolved.gfa` within verkko output directory). Usually this provides better results and does not require realigning ONT reads to graph.
+In verkko up to (and including ) v2.3 coverage of the short nodes in tangles in final graph (assembly.homopolymer-compressed.gfa) is deeply flawed. Currently suggested way is to run TTT.py on the same tangle in hifi-only graph (`2-processGraph/unitig-unrolled-hifi-resolved.gfa` within verkko output directory). Usually this provides better results and does not require realigning ONT reads to graph.
 
 You can find how utig4- nodes match to the utig1- graph in `utig42utig1.gaf` after running `./verkko_coverage_fix/utig4_to_utig1.py <assembly_folder> > utig42utig1.gaf`
 
