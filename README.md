@@ -1,4 +1,4 @@
-TTT stands for Trivial Tangle Traverser. This tool generates "not terrible" traversals(model sequences) through repetitive genomic tangles that somehow matches coverage and the read alignment.
+TTT stands for Trivial Tangle Traverser. This tool generates traversals(model sequences) through repetitive genomic tangles that somehow matches coverage and the read alignment.
 
 For help run `./TTT.py --help`
 
@@ -32,7 +32,7 @@ Generally there are three main reasons for gaps in a scaffold:
   
   Such gaps happen because of the read length being shorter than homozygous nodes. 
   Typical structure looks like a sequence of "bubbles" of similar length, interlaced with long homozygous nodes.
-  TTT can be run on such tangles. But usually if those structures left unresolved in the assembly graph (especially if homozygous nodes are longer than ~100kbp homopolymer-compressed) then there's just no information in the read alignments helping to traverse this region, and thus it will be essentially a random guess.
+  TTT can be run on such tangles. However, usually if those structures left unresolved in the assembly graph (especially if homozygous nodes are longer than ~100kbp homopolymer-compressed) then there's just no information in the read alignments helping to traverse this region, and thus it will be essentially a random guess.
   <p>
   <img width="400" height="400" alt="diploid_simple_tangle" src="https://github.com/user-attachments/assets/650052c6-5f53-43fa-bdfa-464c8a5d6fdb" />
     
@@ -42,7 +42,7 @@ Generally there are three main reasons for gaps in a scaffold:
 * Complex repeats
   
   TTT was designed for such cases. However there can be no more than 2 haplotypes in the tangle (so rDNA tangles connecting multiple chromosomes are usually unresolvable).
-  Also TTT does not scaffold so you need to know how to pair incoming and outgoing nodes for two haplotype cases.
+  Also TTT does not scaffold. Thus, you need to know how to pair incoming and outgoing nodes for two haplotype cases.
   <p>
   <img width="400" height="400" alt="haploid tangle" src="https://github.com/user-attachments/assets/6df23394-811a-49a7-8606-993d2b8f1e89" />  
 
