@@ -27,7 +27,6 @@ def optimize_paths(multi_graph, boundary_nodes, original_graph, num_initial_path
     """Optimize Eulerian paths."""
     best_path = None
     best_score = -1
-    best_optimizer = None
     logging.info(f"Starting optimization with {num_initial_paths} initial paths, max {max_iterations} iterations per path.")
     rc_vertex_map = {}
     for vertex in multi_graph.nodes():
@@ -36,6 +35,7 @@ def optimize_paths(multi_graph, boundary_nodes, original_graph, num_initial_path
 
     if not subgraph_to_traverse:
         logging.error(f"No Eulerian path found.")        
+        sys.exit(1)
     pathOptimizer = PathOptimizer(subgraph_to_traverse, start_vertex, node_id_mapper, rc_vertex_map)
 
     for seed in range(num_initial_paths):
@@ -76,18 +76,26 @@ def optimize_paths(multi_graph, boundary_nodes, original_graph, num_initial_path
     logging.info(f"Optimization completed. Best score: {best_score}.")        
     if best_path:
         logging.info("Path optimizing finished.")
-        pathOptimizer.set_path(best_path)
-        pathOptimizer.get_synonymous_changes(alignment_scorer)
-        best_path_str = get_gaf_string(best_path, node_id_mapper)
-        logging.info(f"Found traversal\t{best_path_str}")   
-        # Output FASTA file
-        logging.info(f"Writing best path to {output_fasta} and gaf to {output_gaf}")
-        pathOptimizer.output_path(original_graph, output_fasta, output_gaf)
-        alignment_scorer.not_satisfied_fraction(best_path)
-        
+        return best_path, best_score, pathOptimizer        
     else:
         logging.error("No valid path found during optimization.")
-    return best_path, best_score, best_optimizer
+        sys.exit(1)
+def print_final_path_info(best_path, pathOptimizer, tangle_nodes, cleaned_tips, detected_coverage, node_id_mapper,alignment_scorer: AlignmentScorer, output_fasta, output_gaf):
+    pathOptimizer.set_path(best_path)
+    pathOptimizer.get_synonymous_changes(alignment_scorer)
+    best_path_str = get_gaf_string(best_path, node_id_mapper)
+    logging.info(f"Found traversal\t{best_path_str}")   
+    # Output FASTA file
+    logging.info(f"Writing best path to {output_fasta} and gaf to {output_gaf}")
+    pathOptimizer.output_path(original_graph, output_fasta, output_gaf)
+    alignment_scorer.not_satisfied_fraction(best_path)
+    
+    logging.info(f"Final path: {get_gaf_string(path, node_id_mapper)}")
+    logging.info(f"Path length (bp): {pathOptimizer.get_path_length(path)}")
+    logging.info(f"Path length (edges): {len(path)}")
+    logging.info(f"Number of tangle nodes in path: {sum(1 for node in path if abs(node) in tangle_nodes)}")
+    logging.info(f"Number of cleaned tips in path: {sum(1 for node in path if abs(node) in cleaned_tips)}")
+    logging.info(f"Detected coverage for the path: {detected_coverage}")
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Solve for integer multiplicities in a GFA tangle graph based on coverage.")
@@ -107,7 +115,7 @@ def parse_arguments():
     parser.add_argument("--early-stopping-limit", type=int, default=15000, help="Early stopping limit for optimization (default: 15000).")
     parser.add_argument("--quality-threshold", type=int, default=20, help="Alignments with quality less than this will be filtered out, default 20")
     parser.add_argument("--basename", required=False, default="traversal", type=str, help="Basename for most of the output files, default `traversal`")
-    parser.add_argument("--time-limit", type=int, default=3600, help="Time limit for MILP solver in seconds (default: 3600 seconds = 1 hour).")
+    parser.add_argument("--milp-time-limit", type=int, default=3600, help="Time limit for MILP solver in seconds (default: 3600 seconds = 1 hour).")
     args = parser.parse_args()
     if not args.verkko_output  and (not args.graph  or not args.alignment ):
         #logging not initialized yet
@@ -149,11 +157,9 @@ def main():
     dual_graph = create_dual_graph(original_graph, node_id_mapper)
 
     tangle_nodes, boundary_nodes = new_identify_tangle_nodes(args, original_graph, dual_graph, node_id_mapper)
-    #tangle_nodes_old, boundary_nodes_old = identify_tangle_nodes(args, original_graph, node_id_mapper)
-    #if len(tangle_nodes) != len(tangle_nodes_old):
-    #    logging.warning(f"Different number of tangle nodes (with rc) identified by new and old methods: {len(tangle_nodes)} vs {len(tangle_nodes_old)}")
+    
     #TODO: do all operations on dual graph        
-    clean_tips(tangle_nodes, original_graph, node_id_mapper)
+    cleaned_tips = clean_tips(tangle_nodes, original_graph, node_id_mapper)
     dual_graph = create_dual_graph(original_graph, node_id_mapper)
     nor_nodes = {abs(node) for node in tangle_nodes}
     
@@ -175,21 +181,22 @@ def main():
     alignment_scorer = AlignmentScorer(alignments, original_graph, node_id_mapper)
     logging.info("Starting multiplicity counting...")
     # TODO: instead of a_values we just use coverage
-    mip_optimizer = MIPOptimizer(node_id_mapper, time_limit=args.time_limit)
+    mip_optimizer = MIPOptimizer(node_id_mapper, time_limit=args.milp_time_limit)
     equations, nonzeros, a_values, boundary_values = mip_optimizer.generate_MIP_equations(tangle_nodes, nor_nodes, cov, median_unique, original_graph, boundary_nodes, directed=True)
-    best_solution, score = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
+    best_solution, score, detected_coverage = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
     if score > 0.2 and args.alt_coverage != None:
-        logging.info(f"High MIP score {score}, trying to re-calculate coverage from alternative (hifi) coverage file {args.alt_coverage}")
+        logging.warning(f"High coverage inconsistency score {score}, trying to re-calculate coverage from alternative (hifi) coverage file {args.alt_coverage}")
         median_unique_range = calculate_median_coverage(args, nor_nodes, original_graph, alt_cov, boundary_nodes, node_id_mapper)
         median_unique = (median_unique_range[0] * DETECTED_LOW_MEDIAN_COVERAGE_VARIATION)
         equations, nonzeros, a_values, boundary_values = mip_optimizer.generate_MIP_equations(tangle_nodes, nor_nodes, alt_cov, median_unique, original_graph, boundary_nodes, directed=True)
-        best_solution_hifi, score_hifi = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
+        best_solution_hifi, score_hifi, detected_coverage_hifi = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
         if score_hifi * 1.2 < score:
-            logging.info(f"Alternative coverage produced better MIP score {score_hifi} vs {score}, using it")
+            logging.warning(f"Alternative coverage produced significantly better MIP score {score_hifi} vs {score}, using it")
             best_solution = best_solution_hifi.copy()
             score = score_hifi
+            detected_coverage = detected_coverage_hifi
         else:
-            logging.info(f"Alternative coverage did not significantly improve MIP score {score_hifi} vs {score}, keeping original (ONT)")
+            logging.warning(f"Alternative coverage did not significantly improve MIP score {score_hifi} vs {score}, keeping original (ONT)")
     # Define output filenames based on the output directory
     output_csv = os.path.join(args.outdir, args.basename + ".multiplicities.csv")
     output_fasta = os.path.join(args.outdir, args.basename + ".hpc.fasta")
@@ -201,7 +208,6 @@ def main():
     multi_graph = create_multi_dual_graph(dual_graph, best_solution, tangle_nodes, boundary_nodes, original_graph, node_id_mapper)
 
     optimize_paths(multi_graph, boundary_nodes, original_graph, args.num_initial_paths, args.max_iterations, args.early_stopping_limit, alignment_scorer, output_fasta, output_gaf)
-    
     print_warnings_summary(args)
 
 if __name__ == "__main__":

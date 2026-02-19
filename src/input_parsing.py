@@ -234,6 +234,7 @@ def node_to_tangle(directed_graph, length_cutoff, target_node, node_mapper):
 def clean_tips(tangle_nodes, directed_graph, node_mapper):
     #removing tips from tangle and graph
     changed= True
+    cleaned_tips = []
     while changed:
         changed = False
         to_erase = []
@@ -242,9 +243,11 @@ def clean_tips(tangle_nodes, directed_graph, node_mapper):
                 changed = True
                 to_erase.append(n)
         for n in to_erase:
-            logging.info(f"Cleaning {node_mapper.node_id_to_name_safe(n)} from tangle")
+            logging.debug(f"Cleaning {node_mapper.node_id_to_name_safe(n)} from tangle")
             tangle_nodes.remove(n)
             directed_graph.remove_node(n)
+            cleaned_tips.append(n)
+    return cleaned_tips
 
 def read_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMapper):
     """Read or construct tangle nodes."""

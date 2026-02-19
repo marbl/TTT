@@ -103,7 +103,7 @@ class MIPOptimizer:
 
             # MIP magic
             pulp.LpSolverDefault.msg = 1
-            # No more than 1 hour
+            # by default no more than 1 hour
             prob.solve(pulp.GLPK(timeLimit=self.time_limit))
             
             result = {}    
@@ -111,10 +111,8 @@ class MIPOptimizer:
             if pulp.LpStatus[prob.status] != "Optimal":
                 logging.warning("MIP did not find an optimal solution.")
                 if len (nonzeros) > 0:
-                    #TODO: think about iterative removal strategy
-                    #logging.warning (f"Removing the constraint that forced to include {self.node_mapper.node_id_to_name_safe(nonzeros[-1])} cov {coverages[nonzeros[-1]]} into traversing paths")
-                    #nonzeros.pop()
-                    logging.warning("Removing all forced inclusions and retrying.")
+                    #TODO: think about iterative removal strategy with binary search
+                    logging.info("Removing all forced inclusions and retrying.")
                     nonzeros = []
                     continue
                 else:
@@ -129,10 +127,10 @@ class MIPOptimizer:
                 detected_coverage = 1/pulp.value(inv_unique_coverage)
                 logging.info(f"Unique coverage for the best MIP solution {detected_coverage}, solution score {score}")
                 if abs(detected_coverage - unique_coverage_range[0]) < 0.01 or abs(detected_coverage - unique_coverage_range[1]) < 0.01:
-                    logging.info(f"Warning, detected best coverage is close to the allowed unique coverage borders{unique_coverage_range}")  
+                    logging.warning(f"Detected best coverage is close to the allowed unique coverage borders{unique_coverage_range}")  
                 normalized_score = self.normalized_score(result, coverages, lengths, detected_coverage)
                 logging.info(f"Normalized score of the MIP solution: {normalized_score}")                                                                          
-                return result, normalized_score
+                return result, normalized_score, detected_coverage
         logging.error("MIP did not find an optimal solution after all adjustment attempts.")
         exit(1)
 
