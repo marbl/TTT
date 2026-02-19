@@ -71,34 +71,6 @@ class PathOptimizer:
                             logging.debug(f"after {path[:i]}")
                             path = path[:i] + add_cycle + path[i:]                        
 
-            #Making paths before and after AUX collinear, to avoid inversions
-            #Seems that it is not reliable, reordering border nodes before
-            '''if self.node_mapper.has_name("AUX"):
-                aux = -1
-                aux_id = self.node_mapper.get_id_for_name("AUX")
-                for i in range(len(path)):
-                    if abs(path[i].original_node) == aux_id:
-                        aux = i
-                        logging.debug(f"Found AUX at position {aux}")
-                        break
-                log_assert(aux != -1, "AUX node present in graph(2-haplo tangle) but not found in path")
-                forward_matches = 0
-                reverse_matches = 0
-                for i in range (aux):
-                    for j in range (aux + 1, len(path)):
-                        if path[i].original_node == path[j].original_node:
-                            forward_matches += 1
-                            logging.debug (f"Forward match node {self.node_mapper.node_id_to_name_safe(path[i].original_node)}")
-                        if path[i].original_node == -path[j].original_node:
-                            logging.debug (f"Reverse match node {self.node_mapper.node_id_to_name_safe(path[i].original_node)}")
-                            reverse_matches += 1
-                logging.debug (f"Forward matches: {forward_matches}, Reverse matches: {reverse_matches}")
-                if reverse_matches > forward_matches:
-                    logging.debug("More reverse matches than forward matches, reversing second subpath")
-                    logging.debug(f"Path before inversion: {get_gaf_string(path, self.node_mapper)}")
-                    path = path[:aux+1] + rc_path(path[aux+1:], self.rc_vertex_map)
-                    logging.debug(f"Path after inversion: {get_gaf_string(path, self.node_mapper)}")
-'''
             logging.info(f"Randomized Eulerian path found with seed {self.seed} with {len(path)} nodes !")
             logging.debug (f"{get_gaf_string(path, self.node_mapper)}")
 
@@ -144,6 +116,7 @@ class PathOptimizer:
                     return idx
         return -1
 
+    #TODO: random permutation for the arrays and then unite with synonymous changes
     def get_random_change(self, iter):
         """
         Finds two non-overlapping intervals in the Eulerian path that start and end at the same vertices
@@ -341,15 +314,15 @@ class PathOptimizer:
                                 logging.warning(f"Unexpected final score improved {new_score} > {final_score} and affects AUX position {aux_pos}")
                             else:
                                 logging.warning(f"Unexpected final score improved {new_score} > {final_score} and does not affect AUX position {aux_pos}")
-        #TODO: check for possible inversions
+        #TODO: check for possible inversions+swaps?
         if len(invertable_intervals) + len(swappable_intervals) > 0:
             if len(swappable_intervals) > 0:
-                logging.warning(f"Total {len(swappable_intervals)} path swaps with the same score found!")
+                logging.info(f"Total {len(swappable_intervals)} path swaps with the same score found!")
                 for first_start, first_end, second_start, second_end in swappable_intervals:
                     logging.info(f"Swappable interval: {first_start}-{first_end} with {second_start}-{second_end}")
                     logging.info(f"Subpaths {get_gaf_string(self.traversing_path[first_start:first_end + 1], self.node_mapper)} and {get_gaf_string(self.traversing_path[second_start:second_end + 1], self.node_mapper)}")
             if len(invertable_intervals) > 0:
-                logging.warning(f"Total {len(invertable_intervals)} path inversions with the same score found!")
+                logging.info(f"Total {len(invertable_intervals)} path inversions with the same score found!")
                 for start, end in invertable_intervals:
                     logging.info(f"Invertable interval: {start}-{end}")
                     logging.info(f"Subpath {get_gaf_string(self.traversing_path[start:end + 1], self.node_mapper)}")
