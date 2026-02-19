@@ -85,7 +85,7 @@ def create_dual_graph(original_graph: nx.MultiDiGraph, node_mapper):
 def is_tangle_vertex(C, tangle_set):
     return C[0] in tangle_set or C[1] in tangle_set
 
-def create_multi_dual_graph(dual_graph: nx.DiGraph, multiplicities: dict, tangle_nodes: set, boundary_nodes: dict, G, node_mapper):
+def create_multi_dual_graph(tangle):
     """
     edge of multiplicity X -> X multiedges multiplicity 1
     """
@@ -93,31 +93,31 @@ def create_multi_dual_graph(dual_graph: nx.DiGraph, multiplicities: dict, tangle
     logging.info("Creating multi-dual graph from dual graph and multiplicities...")
 
     # Ensure all nodes from the original dual graph are present
-    for node in dual_graph.nodes():
-        if is_tangle_vertex(node, tangle_nodes):
+    for node in tangle.dual_graph.nodes():
+        if is_tangle_vertex(node, tangle.nodes):
             multi_dual_graph.add_node(node)
 
     #adding start and sink nodes
-    incomings = set(boundary_nodes.keys())
-    outgoings = set(boundary_nodes.values())
-    for b in boundary_nodes:
-        incomings.add(-boundary_nodes[b])
+    incomings = set(tangle.boundary_nodes.keys())
+    outgoings = set(tangle.boundary_nodes.values())
+    for b in tangle.boundary_nodes:
+        incomings.add(-tangle.boundary_nodes[b])
         outgoings.add(-b)
     edges_added = 0
 
-    for b in boundary_nodes.keys():
-        for next_node in G.successors(b):
-            fw_edge = get_canonical_nodepair(b, next_node, G, node_mapper)                                
-            logging.debug(f"start {node_mapper.node_id_to_name_safe(b)} {node_mapper.node_id_to_name_safe(next_node)}")
+    for b in tangle.boundary_nodes.keys():
+        for next_node in tangle.original_graph.successors(b):
+            fw_edge = get_canonical_nodepair(b, next_node, tangle.original_graph, tangle.node_id_mapper)                                
+            logging.debug(f"start {tangle.node_id_mapper.node_id_to_name_safe(b)} {tangle.node_id_mapper.node_id_to_name_safe(next_node)}")
             start = (0, b)
             multi_dual_graph.add_node(start)
             multi_dual_graph.add_edge(start, fw_edge, original_node=b, key = f"{b}_{edges_added}")
             edges_added += 1
             break 
-    for b in boundary_nodes.values():
-        for next_node in G.predecessors(b):
-            bw_edge = get_canonical_nodepair(next_node, b, G, node_mapper)                                
-            logging.debug(f"start {node_mapper.node_id_to_name_safe(next_node)} {node_mapper.node_id_to_name_safe(b)}")
+    for b in tangle.boundary_nodes.values():
+        for next_node in tangle.original_graph.predecessors(b):
+            bw_edge = get_canonical_nodepair(next_node, b, tangle.original_graph, tangle.node_id_mapper)                                
+            logging.debug(f"start {tangle.node_id_mapper.node_id_to_name_safe(next_node)} {tangle.node_id_mapper.node_id_to_name_safe(b)}")
             start = (b, 0)
             multi_dual_graph.add_node(start)
             multi_dual_graph.add_edge(bw_edge, start, original_node=b, key = f"{b}_{edges_added}")
@@ -126,7 +126,7 @@ def create_multi_dual_graph(dual_graph: nx.DiGraph, multiplicities: dict, tangle
     
     # Iterate through edges of the dual graph and add them to the multi-graph
     # based on the multiplicity of the original node they represent.
-    for u, v, data in dual_graph.edges(data=True):
+    for u, v, data in tangle.dual_graph.edges(data=True):
         if (not u in multi_dual_graph.nodes()) or (not v in multi_dual_graph.nodes()):
             continue
         original_node_oriented = data.get('original_node')
@@ -136,47 +136,48 @@ def create_multi_dual_graph(dual_graph: nx.DiGraph, multiplicities: dict, tangle
         
         original_node_base = original_node_oriented #abs(original_node_oriented)
 
-        multiplicity = multiplicities[original_node_base]
+        multiplicity = tangle.multiplicities[original_node_base]
 
         if multiplicity < 0:
-            logging.error(f"Negative multiplicity {multiplicity} for node {node_mapper.node_id_to_name_safe(original_node_base)}. Treating as 0 for edge ({u} -> {v}).")
+            logging.error(f"Negative multiplicity {multiplicity} for node {tangle.node_id_mapper.node_id_to_name_safe(original_node_base)}. Treating as 0 for edge ({u} -> {v}).")
             exit(0)
         # Add the edge 'multiplicity' times to the multi-dual graph
-        logging.debug(f"Adding {multiplicity} multiedges for {node_mapper.node_id_to_name_safe(original_node_oriented)}")
+        logging.debug(f"Adding {multiplicity} multiedges for {tangle.node_id_mapper.node_id_to_name_safe(original_node_oriented)}")
         for _ in range(multiplicity):
             # Add edge with the original node attribute
             multi_dual_graph.add_edge(u, v, original_node=original_node_oriented, key = str(original_node_oriented) + "_"+str(edges_added))
             edges_added += 1
 
     logging.info(f"Created multi-dual graph with {multi_dual_graph.number_of_nodes()} nodes.")
-    logging.info(f"Added {edges_added} edges to multi-dual graph based on multiplicities (original dual graph had {dual_graph.number_of_edges()} unique edges).")
+    logging.info(f"Added {edges_added} edges to multi-dual graph based on multiplicities (original dual graph had {tangle.dual_graph.number_of_edges()} unique edges).")
     for v in multi_dual_graph.nodes():
         logging.debug(f"{v}: in {multi_dual_graph.in_degree[v] } out {multi_dual_graph.out_degree[v] }")    
 
     return multi_dual_graph
 
-def get_traversable_subgraph(multi_dual_graph: nx.MultiDiGraph, border_nodes, original_graph, node_mapper):
+def get_traversable_subgraph(tangle):
     """
     Supplementary for Euler path search - search itself moved to path_optimizer.py
     """
+    multi_dual_graph = tangle.multi_graph
     #we may have some disconnected cycles in reverse-complement tangle, reversing them.
     start_vertices = []
     end_vertices = []
-    for n in border_nodes:
+    for n in tangle.boundary_nodes:
         #border tips encoding
         start_vertices.append((0, n))
         end_vertices.append((n, 0))
 
     logging.info(f"Start and end vertices in the graph {start_vertices}, {end_vertices}")      
 
-    border_nodes_count = len(border_nodes)
+    border_nodes_count = len(tangle.boundary_nodes)
     # Only 1-1 or 2-2 tangles for now
     log_assert(border_nodes_count == 1 or border_nodes_count == 2, f"Only 1-1 or 2-2 tangles are supported")
     log_assert(len(start_vertices) == border_nodes_count and len(end_vertices) == border_nodes_count, f"Start and end vertices count mismatch: {len(start_vertices)} vs {border_nodes_count} or {len(end_vertices)} vs {border_nodes_count}")
     start_vertices.sort()
     start_vertex = start_vertices[0]
     start_vertex_node = start_vertex[1]
-    matching_end_vertex_node = border_nodes[start_vertex_node]
+    matching_end_vertex_node = tangle.boundary_nodes[start_vertex_node]
     matching_end_vertex = (matching_end_vertex_node, 0)
     for e in multi_dual_graph.edges(keys=True):
         logging.debug(f"Edge {e}")
@@ -184,9 +185,9 @@ def get_traversable_subgraph(multi_dual_graph: nx.MultiDiGraph, border_nodes, or
     # If there are 4 border nodes, we need to find the correct end vertex and add the auxiliary connection
     if border_nodes_count == 2:
         aux_node_str = "AUX"
-        aux_int_id = node_mapper.parse_node_id(aux_node_str)
+        aux_int_id = tangle.node_id_mapper.parse_node_id(aux_node_str)
         multi_dual_graph.add_edge(matching_end_vertex, start_vertices[1], original_node=aux_int_id, key=f"{aux_int_id}_0")
-        logging.info(f"Added auxiliary edge from {node_mapper.node_id_to_name_safe(matching_end_vertex_node)} to {node_mapper.node_id_to_name_safe(start_vertices[1][1])}")
+        logging.info(f"Added auxiliary edge from {tangle.node_id_mapper.node_id_to_name_safe(matching_end_vertex_node)} to {tangle.node_id_mapper.node_id_to_name_safe(start_vertices[1][1])}")
         reachable_verts = nx.descendants(multi_dual_graph, start_vertex)
         # Add the start_node itself
         reachable_verts.add(start_vertex)
@@ -219,7 +220,7 @@ def get_traversable_subgraph(multi_dual_graph: nx.MultiDiGraph, border_nodes, or
                 new_key = e[2][1:]
             else:
                 new_key = '-' + e[2]
-            multi_dual_graph.add_edge(get_canonical_rc_vertex(e[1], original_graph, node_mapper), get_canonical_rc_vertex(e[0], original_graph, node_mapper), original_node=-int(data['original_node']), key = new_key)
+            multi_dual_graph.add_edge(get_canonical_rc_vertex(e[1], tangle.original_graph, tangle.node_id_mapper), get_canonical_rc_vertex(e[0], tangle.original_graph, tangle.node_id_mapper), original_node=-int(data['original_node']), key = new_key)
 
     logging.debug(f"After transformation")
     for e in multi_dual_graph.edges(keys=True):
@@ -241,7 +242,7 @@ def get_traversable_subgraph(multi_dual_graph: nx.MultiDiGraph, border_nodes, or
         out_str = "Unreachable edges: "
         for e in unreachable_edges:                    
             data = multi_dual_graph.get_edge_data(e[0], e[1], key=e[2])
-            out_str += f"{node_mapper.node_id_to_name_safe(data['original_node'])} "
+            out_str += f"{tangle.node_id_mapper.node_id_to_name_safe(data['original_node'])} "
             multi_dual_graph.remove_edge(e[0], e[1], key = e[2])
         logging.warning(out_str)
 

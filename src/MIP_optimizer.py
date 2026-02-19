@@ -75,7 +75,13 @@ class MIPOptimizer:
 
             # Define continuous variables for absolute deviation |x_i - a_i|
             d_vars = {i: pulp.LpVariable(f"d_{i}", lowBound=0, cat="Continuous") for i in coverages}   
-            lengths = {i: original_graph.nodes[i].get('length', 0) for i in coverages}
+            # Some nodes might have been removed by clean_tips, so check if they exist
+            lengths = {}
+            for i in coverages:
+                if i in original_graph.nodes:
+                    lengths[i] = original_graph.nodes[i].get('length', 0)
+                else:
+                    lengths[i] = 0
             #do not want boundary nodes to contribute to the objective, coverage is usually a bit lower within the tangle
             for i in boundary_values:
                 if i in lengths:
@@ -135,18 +141,18 @@ class MIPOptimizer:
         exit(1)
 
 
-    def generate_MIP_equations(self, tangle_nodes, nor_nodes, cov, median_unique, original_graph, boundary_nodes, directed=False):
+    def generate_MIP_equations(self, tangle, directed=False):
 
         junction_equations = []    
         used = set()
-        extended_tangle = tangle_nodes.copy()
+        extended_tangle = tangle.nodes.copy()
         # format: used ins to corresponding used outs
         all_boundary_nodes = set()
-        for b in boundary_nodes:
+        for b in tangle.boundary_nodes:
             all_boundary_nodes.add(abs(b))
             all_boundary_nodes.add(-abs(b))
-            all_boundary_nodes.add(abs(boundary_nodes[b]))
-            all_boundary_nodes.add(-abs(boundary_nodes[b]))
+            all_boundary_nodes.add(abs(tangle.boundary_nodes[b]))
+            all_boundary_nodes.add(-abs(tangle.boundary_nodes[b]))
         extended_tangle.update(all_boundary_nodes)
         canonic_name = {}
         for node in extended_tangle:
@@ -162,7 +168,7 @@ class MIPOptimizer:
             arr = [[], []]
             back_node = ""
             bad_extension = 0
-            for to_node in original_graph.successors(from_node):
+            for to_node in tangle.original_graph.successors(from_node):
                 back_node = to_node
                 if not directed:
                     used.add(-to_node)
@@ -174,12 +180,12 @@ class MIPOptimizer:
                
             if bad_extension != 0:
                 if not (from_node in all_boundary_nodes):
-                    logging.error(f"Somehow jumped over boundary nodes {self.node_mapper.node_id_to_name_safe(from_node)} {self.node_mapper.node_id_to_name_safe(back_node)} {boundary_nodes}")
+                    logging.error(f"Somehow jumped over boundary nodes {self.node_mapper.node_id_to_name_safe(from_node)} {self.node_mapper.node_id_to_name_safe(back_node)} {tangle.boundary_nodes}")
                     exit()
                 else:
                     continue
             if back_node != "":
-                for alt_start_node in original_graph.predecessors(back_node):
+                for alt_start_node in tangle.original_graph.predecessors(back_node):
                     used.add(alt_start_node)
                     if alt_start_node in extended_tangle:
                         arr[0].append(canonic_name[alt_start_node])
@@ -187,29 +193,29 @@ class MIPOptimizer:
                         bad_extension = alt_start_node
                         break
             if bad_extension != 0:
-                logging.error(f"Somehow jumped over boundary nodes (backwards) {self.node_mapper.node_id_to_name_safe(alt_start_node)} {self.node_mapper.node_id_to_name_safe(bad_extension)} {boundary_nodes}")
+                logging.error(f"Somehow jumped over boundary nodes (backwards) {self.node_mapper.node_id_to_name_safe(alt_start_node)} {self.node_mapper.node_id_to_name_safe(bad_extension)} {tangle.boundary_nodes}")
                 exit()
             junction_equations.append(arr)
 
         
         must_use_nodes = []
         coverage = {}
-        for node in nor_nodes:        
-            coverage[node] = float(cov[node])  # / median_unique
+        for node in tangle.nor_nodes:        
+            coverage[node] = float(tangle.coverage_dict[node])  # / median_unique
             logging.debug(f"Coverage of {self.node_mapper.node_id_to_name_safe(node)} : {coverage[node]}")
             #if (coverage[node] / median_unique >= 0.3 and (coverage[node] >= 5)) or coverage[node]/median_unique >= 0.6:
-            if (coverage[node] / median_unique >= self.ALWAYS_INCLUDE_COVERAGE_FRACTION):
+            if (coverage[node] / tangle.median_unique_coverage >= self.ALWAYS_INCLUDE_COVERAGE_FRACTION):
                 must_use_nodes.append((node, coverage[node]))
         must_use_nodes = sorted(must_use_nodes, key=lambda x: x[1], reverse=True)
         nonzeroes = [node for node, cov in must_use_nodes]
         boundary_values = {}
-        for b in boundary_nodes:
+        for b in tangle.boundary_nodes:
             boundary_values[b] = 1
-            boundary_values[boundary_nodes[b]] = 1
+            boundary_values[tangle.boundary_nodes[b]] = 1
             boundary_values[-b] = 0
-            boundary_values[-boundary_nodes[b]] = 0
-            coverage[abs(b)] = float(cov[abs(b)]) 
-            coverage[abs(boundary_nodes[b])] = float(cov[abs(boundary_nodes[b])])
+            boundary_values[-tangle.boundary_nodes[b]] = 0
+            coverage[abs(b)] = float(tangle.coverage_dict[abs(b)]) 
+            coverage[abs(tangle.boundary_nodes[b])] = float(tangle.coverage_dict[abs(tangle.boundary_nodes[b])])
         return junction_equations, nonzeroes, coverage, boundary_values
     
     def write_multiplicities(self, output_file, solution, cov):

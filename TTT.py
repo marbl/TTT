@@ -10,6 +10,7 @@ from src.alignment_scorer import AlignmentScorer
 from src.logging_utils import setup_logging, print_warnings_summary
 from src.node_id_mapper import NodeIdMapper
 from src.MIP_optimizer import MIPOptimizer
+from src.tangle import Tangle
 from src.input_parsing import (
     parse_gfa, parse_gaf, read_tangle_nodes, get_oriented_boundaries, identify_tangle_nodes, new_identify_tangle_nodes, read_coverage_file,
     coverage_from_graph, verify_coverage, calculate_median_coverage, clean_tips, DETECTED_LOW_MEDIAN_COVERAGE_VARIATION, DETECTED_HIGH_MEDIAN_COVERAGE_VARIATION
@@ -23,22 +24,22 @@ from src.graph_transformation import (
 # Create global instances
 node_id_mapper = NodeIdMapper()
 
-def optimize_paths(multi_graph, boundary_nodes, original_graph, num_initial_paths, max_iterations, early_stopping_limit, alignment_scorer: AlignmentScorer, output_fasta, output_gaf):
+def optimize_paths(tangle, alignment_scorer: AlignmentScorer, args):
     """Optimize Eulerian paths."""
     best_path = None
     best_score = -1
-    logging.info(f"Starting optimization with {num_initial_paths} initial paths, max {max_iterations} iterations per path.")
+    logging.info(f"Starting optimization with {args.num_initial_paths} initial paths, max {args.max_iterations} iterations per path.")
     rc_vertex_map = {}
-    for vertex in multi_graph.nodes():
-        rc_vertex_map[vertex] = get_canonical_rc_vertex(vertex, original_graph, node_id_mapper)
-    subgraph_to_traverse, start_vertex = get_traversable_subgraph(multi_graph, boundary_nodes, original_graph, node_id_mapper)    
+    for vertex in tangle.multi_graph.nodes():
+        rc_vertex_map[vertex] = get_canonical_rc_vertex(vertex, tangle.original_graph, tangle.node_id_mapper)
+    subgraph_to_traverse, start_vertex = get_traversable_subgraph(tangle)    
 
     if not subgraph_to_traverse:
         logging.error(f"No Eulerian path found.")        
         sys.exit(1)
-    pathOptimizer = PathOptimizer(subgraph_to_traverse, start_vertex, node_id_mapper, rc_vertex_map)
+    pathOptimizer = PathOptimizer(subgraph_to_traverse, start_vertex, tangle.node_id_mapper, rc_vertex_map)
 
-    for seed in range(num_initial_paths):
+    for seed in range(args.num_initial_paths):
         logging.info(f"Generating initial path with seed {seed}.")
         pathOptimizer.generate_random_eulerian_path(seed)
         #TODO: most of this logic should go to PathOptimizer
@@ -47,12 +48,12 @@ def optimize_paths(multi_graph, boundary_nodes, original_graph, num_initial_path
         logging.info(f"Initial path score for seed {seed}: {current_score}.")
 
         iterations_since_improvement = 0
-        for i in range(max_iterations):
-            if iterations_since_improvement >= early_stopping_limit:
+        for i in range(args.max_iterations):
+            if iterations_since_improvement >= args.early_stopping_limit:
                 logging.info(f"Early stopping for seed {seed} on iteration {i} after {iterations_since_improvement} iterations without improvement.")
                 break
             
-            new_path = pathOptimizer.get_random_change(seed * max_iterations + i)
+            new_path = pathOptimizer.get_random_change(seed * args.max_iterations + i)
             if new_path is None:
                 logging.info(f"Not able to change a path at all, stopping")
                 break
@@ -80,22 +81,56 @@ def optimize_paths(multi_graph, boundary_nodes, original_graph, num_initial_path
     else:
         logging.error("No valid path found during optimization.")
         sys.exit(1)
-def print_final_path_info(best_path, pathOptimizer, tangle_nodes, cleaned_tips, detected_coverage, node_id_mapper,alignment_scorer: AlignmentScorer, output_fasta, output_gaf):
+
+def print_final_path_info(best_path, pathOptimizer, tangle, alignment_scorer: AlignmentScorer, args):
+    output_fasta = os.path.join(args.outdir, args.basename + ".hpc.fasta")
+    output_gaf = os.path.join(args.outdir, args.basename + ".gaf")
+    
     pathOptimizer.set_path(best_path)
     pathOptimizer.get_synonymous_changes(alignment_scorer)
-    best_path_str = get_gaf_string(best_path, node_id_mapper)
+    best_path_str = get_gaf_string(best_path, tangle.node_id_mapper)
     logging.info(f"Found traversal\t{best_path_str}")   
     # Output FASTA file
     logging.info(f"Writing best path to {output_fasta} and gaf to {output_gaf}")
-    pathOptimizer.output_path(original_graph, output_fasta, output_gaf)
+    pathOptimizer.output_path(tangle.original_graph, output_fasta, output_gaf)
     alignment_scorer.not_satisfied_fraction(best_path)
-    
-    logging.info(f"Final path: {get_gaf_string(path, node_id_mapper)}")
-    logging.info(f"Path length (bp): {pathOptimizer.get_path_length(path)}")
-    logging.info(f"Path length (edges): {len(path)}")
-    logging.info(f"Number of tangle nodes in path: {sum(1 for node in path if abs(node) in tangle_nodes)}")
-    logging.info(f"Number of cleaned tips in path: {sum(1 for node in path if abs(node) in cleaned_tips)}")
-    logging.info(f"Detected coverage for the path: {detected_coverage}")
+
+    coverage_fraction = MIPOptimizer.ALWAYS_INCLUDE_COVERAGE_FRACTION
+
+    cutoff = coverage_fraction * tangle.detected_coverage
+    path_abs_ids = {abs(edge.original_node) for edge in best_path}
+    tips_abs_ids = {abs(node) for node in tangle.cleaned_tips}
+    non_tips_abs_ids = {abs(node) for node in tangle.nodes} - tips_abs_ids
+
+    missing_tip_ids = {
+        node_id for node_id in tips_abs_ids
+        if tangle.coverage_dict.get(node_id, 0) >= cutoff and node_id not in path_abs_ids
+    }
+    missing_non_tip_ids = {
+        node_id for node_id in non_tips_abs_ids
+        if tangle.coverage_dict.get(node_id, 0) >= cutoff and node_id not in path_abs_ids
+    }
+
+    missing_tips_count = len(missing_tip_ids)
+    missing_non_tips_count = len(missing_non_tip_ids)
+    missing_abs_ids = sorted(missing_tip_ids | missing_non_tip_ids)
+
+    missing_total = missing_tips_count + missing_non_tips_count
+    if missing_total > 0:
+        missing_names = ", ".join([tangle.node_id_mapper.node_id_to_unoriented_name(node_id) for node_id in missing_abs_ids])
+        logging.warning(
+            f"Missing high-coverage edges in final path: total={missing_total} (tips={missing_tips_count}, non_tips={missing_non_tips_count}), "
+            f"threshold={coverage_fraction * tangle.detected_coverage:.2f}, edges={missing_names}"            
+        )
+        logging.warning(f"TTT was not able to include high-covered tips or some tip-like structures in the path because of the graph structure.")
+    else:
+        logging.info(
+            f"No missing high-coverage edges in final path, "
+            f"threshold={coverage_fraction * tangle.detected_coverage:.2f}"
+        )
+        
+    logging.info(f"Detected coverage for the path: {tangle.detected_coverage}")
+    logging.info(f"Final path: {get_gaf_string(best_path, tangle.node_id_mapper)}")
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Solve for integer multiplicities in a GFA tangle graph based on coverage.")
@@ -158,38 +193,51 @@ def main():
 
     tangle_nodes, boundary_nodes = new_identify_tangle_nodes(args, original_graph, dual_graph, node_id_mapper)
     
-    #TODO: do all operations on dual graph        
-    cleaned_tips = clean_tips(tangle_nodes, original_graph, node_id_mapper)
-    dual_graph = create_dual_graph(original_graph, node_id_mapper)
     nor_nodes = {abs(node) for node in tangle_nodes}
     
-    used_nodes = nor_nodes.copy()
-    for b in boundary_nodes:
-        used_nodes.add(abs(b))
-        used_nodes.add(abs(boundary_nodes[b]))   
+    # Create Tangle object with core structural information
+    tangle = Tangle(
+        nodes=tangle_nodes,
+        nor_nodes=nor_nodes,
+        boundary_nodes=boundary_nodes,
+        original_graph=original_graph,
+        dual_graph=dual_graph,
+        node_id_mapper=node_id_mapper
+    )
     
-    used_or_nodes = tangle_nodes.copy()
-    for b in boundary_nodes:
+    #TODO: do all operations on dual graph        
+    tangle.cleaned_tips = clean_tips(tangle, node_id_mapper)
+    tangle.dual_graph = create_dual_graph(original_graph, node_id_mapper)
+    
+    used_or_nodes = tangle.nodes.copy()
+    for b in tangle.boundary_nodes:
         used_or_nodes.add(b)
-        used_or_nodes.add(boundary_nodes[b])
+        used_or_nodes.add(tangle.boundary_nodes[b])
         used_or_nodes.add(-b)
-        used_or_nodes.add(-boundary_nodes[b])
-    median_unique_range = calculate_median_coverage(args, nor_nodes, original_graph, cov, boundary_nodes, node_id_mapper)
-    median_unique = (median_unique_range[0] * DETECTED_LOW_MEDIAN_COVERAGE_VARIATION)
+        used_or_nodes.add(-tangle.boundary_nodes[b])
+    
+    tangle.coverage_dict = cov
+    tangle.coverage_range = calculate_median_coverage(tangle, args)
+    median_unique = (tangle.coverage_range[0] * DETECTED_LOW_MEDIAN_COVERAGE_VARIATION)
+    tangle.median_unique_coverage = median_unique
+    
     filtered_alignment_file = os.path.join(args.outdir, f"{args.basename}.q{args.quality_threshold}.used_alignments.gaf")
     alignments = parse_gaf(args.alignment, used_or_nodes, filtered_alignment_file, args.quality_threshold, node_id_mapper)
     alignment_scorer = AlignmentScorer(alignments, original_graph, node_id_mapper)
     logging.info("Starting multiplicity counting...")
     # TODO: instead of a_values we just use coverage
     mip_optimizer = MIPOptimizer(node_id_mapper, time_limit=args.milp_time_limit)
-    equations, nonzeros, a_values, boundary_values = mip_optimizer.generate_MIP_equations(tangle_nodes, nor_nodes, cov, median_unique, original_graph, boundary_nodes, directed=True)
-    best_solution, score, detected_coverage = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
+    equations, nonzeros, a_values, boundary_values = mip_optimizer.generate_MIP_equations(tangle, directed=True)
+    best_solution, score, detected_coverage = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, tangle.coverage_range, original_graph)
     if score > 0.2 and args.alt_coverage != None:
         logging.warning(f"High coverage inconsistency score {score}, trying to re-calculate coverage from alternative (hifi) coverage file {args.alt_coverage}")
-        median_unique_range = calculate_median_coverage(args, nor_nodes, original_graph, alt_cov, boundary_nodes, node_id_mapper)
-        median_unique = (median_unique_range[0] * DETECTED_LOW_MEDIAN_COVERAGE_VARIATION)
-        equations, nonzeros, a_values, boundary_values = mip_optimizer.generate_MIP_equations(tangle_nodes, nor_nodes, alt_cov, median_unique, original_graph, boundary_nodes, directed=True)
-        best_solution_hifi, score_hifi, detected_coverage_hifi = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, median_unique_range, original_graph)
+        # Temporarily update tangle with alternative coverage
+        tangle.coverage_dict = alt_cov
+        tangle.coverage_range = calculate_median_coverage(tangle, args)
+        median_unique = (tangle.coverage_range[0] * DETECTED_LOW_MEDIAN_COVERAGE_VARIATION)
+        tangle.median_unique_coverage = median_unique
+        equations, nonzeros, a_values, boundary_values = mip_optimizer.generate_MIP_equations(tangle, directed=True)
+        best_solution_hifi, score_hifi, detected_coverage_hifi = mip_optimizer.solve_MIP(equations, nonzeros, boundary_values, a_values, tangle.coverage_range, original_graph)
         if score_hifi * 1.2 < score:
             logging.warning(f"Alternative coverage produced significantly better MIP score {score_hifi} vs {score}, using it")
             best_solution = best_solution_hifi.copy()
@@ -197,17 +245,23 @@ def main():
             detected_coverage = detected_coverage_hifi
         else:
             logging.warning(f"Alternative coverage did not significantly improve MIP score {score_hifi} vs {score}, keeping original (ONT)")
-    # Define output filenames based on the output directory
+            # Restore original coverage
+            tangle.coverage_dict = cov
+            tangle.coverage_range = calculate_median_coverage(tangle, args)
+            tangle.median_unique_coverage = (tangle.coverage_range[0] * DETECTED_LOW_MEDIAN_COVERAGE_VARIATION)
+    # Store MIP solution in tangle
+    tangle.multiplicities = best_solution
+    tangle.detected_coverage = detected_coverage
+    
+    # Define output filename for multiplicities CSV
     output_csv = os.path.join(args.outdir, args.basename + ".multiplicities.csv")
-    output_fasta = os.path.join(args.outdir, args.basename + ".hpc.fasta")
-    output_gaf = os.path.join(args.outdir, args.basename + ".gaf")
-
     mip_optimizer.write_multiplicities(output_csv, best_solution, cov)
 
     #Splitting edges according to multiplicities
-    multi_graph = create_multi_dual_graph(dual_graph, best_solution, tangle_nodes, boundary_nodes, original_graph, node_id_mapper)
+    tangle.multi_graph = create_multi_dual_graph(tangle)
 
-    optimize_paths(multi_graph, boundary_nodes, original_graph, args.num_initial_paths, args.max_iterations, args.early_stopping_limit, alignment_scorer, output_fasta, output_gaf)
+    best_path, best_score, pathOptimizer = optimize_paths(tangle, alignment_scorer, args)
+    print_final_path_info(best_path, pathOptimizer, tangle, alignment_scorer, args)
     print_warnings_summary(args)
 
 if __name__ == "__main__":

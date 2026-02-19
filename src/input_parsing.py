@@ -231,21 +231,21 @@ def node_to_tangle(directed_graph, length_cutoff, target_node, node_mapper):
     
     return connected_component
 
-def clean_tips(tangle_nodes, directed_graph, node_mapper):
+def clean_tips(tangle, node_mapper):
     #removing tips from tangle and graph
     changed= True
     cleaned_tips = []
     while changed:
         changed = False
         to_erase = []
-        for n in tangle_nodes:
-            if directed_graph.out_degree(n) == 0 or directed_graph.in_degree(n) == 0:
+        for n in tangle.nodes:
+            if tangle.original_graph.out_degree(n) == 0 or tangle.original_graph.in_degree(n) == 0:
                 changed = True
                 to_erase.append(n)
         for n in to_erase:
             logging.debug(f"Cleaning {node_mapper.node_id_to_name_safe(n)} from tangle")
-            tangle_nodes.remove(n)
-            directed_graph.remove_node(n)
+            tangle.nodes.remove(n)
+            tangle.original_graph.remove_node(n)
             cleaned_tips.append(n)
     return cleaned_tips
 
@@ -371,7 +371,7 @@ def calculate_median_unique_coverage(nor_nodes, original_graph:nx.DiGraph, cov, 
             elif cov[node_id] >= min_b * GIVEN_MEDIAN_COVERAGE_VARIATION:
                 logging.debug(f"Node {node_mapper.node_id_to_name_safe(node_id)} looks structurally unique but coverage {cov[node_id]} is higher than borders {min_b} * variation {GIVEN_MEDIAN_COVERAGE_VARIATION}")
             else:
-                logging.warning(f"Structurally unique node {node_mapper.node_id_to_name_safe(node_id)} not found in coverage file.")
+                logging.info(f"Structurally unique node {node_mapper.node_id_to_name_safe(node_id)} not found in coverage file.")
         #else:
             #logging.debug(f"Node {node_mapper.node_id_to_name_safe(node_id)} is not structurally unique (+ unique: {is_plus_unique}, - unique: {is_minus_unique}).")
 
@@ -398,18 +398,18 @@ def calculate_median_unique_coverage(nor_nodes, original_graph:nx.DiGraph, cov, 
     logging.debug(f"Unique coverages: {unique_coverages}")
     return median_cov
 
-def calculate_median_coverage(args, nor_nodes, original_graph:nx.DiGraph, cov, boundary_nodes, node_mapper:NodeIdMapper):
+def calculate_median_coverage(tangle, args):
     """Calculate or use provided median unique coverage."""
     min_b = 1000000
-    all_boundary = list(boundary_nodes.keys()) + list(boundary_nodes.values())
+    all_boundary = list(tangle.boundary_nodes.keys()) + list(tangle.boundary_nodes.values())
     max_b = 0
-    for source, sink in boundary_nodes.items():
-        logging.info (f"Source: {node_mapper.node_id_to_name_safe(source)} coverage {cov[abs(source)]}")
-        logging.info (f"Sink: {node_mapper.node_id_to_name_safe(sink)} coverage {cov[abs(sink)]}")
-        min_b = min(min_b, cov[abs(source)])
-        min_b = min(min_b, cov[abs(sink)])
-        max_b = max(max_b, cov[abs(source)])
-        max_b = max(max_b, cov[abs(sink)])
+    for source, sink in tangle.boundary_nodes.items():
+        logging.info (f"Source: {tangle.node_id_mapper.node_id_to_name_safe(source)} coverage {tangle.coverage_dict[abs(source)]}")
+        logging.info (f"Sink: {tangle.node_id_mapper.node_id_to_name_safe(sink)} coverage {tangle.coverage_dict[abs(sink)]}")
+        min_b = min(min_b, tangle.coverage_dict[abs(source)])
+        min_b = min(min_b, tangle.coverage_dict[abs(sink)])
+        max_b = max(max_b, tangle.coverage_dict[abs(source)])
+        max_b = max(max_b, tangle.coverage_dict[abs(sink)])
     if args.median_unique is not None:
         return [args.median_unique/GIVEN_MEDIAN_COVERAGE_VARIATION, args.median_unique * GIVEN_MEDIAN_COVERAGE_VARIATION]
     #calculated_median = calculate_median_unique_coverage(nor_nodes, original_graph, cov, min_b, node_mapper)
@@ -418,7 +418,6 @@ def calculate_median_coverage(args, nor_nodes, original_graph:nx.DiGraph, cov, b
     #else:
     res = [min_b/DETECTED_LOW_MEDIAN_COVERAGE_VARIATION, max_b* DETECTED_HIGH_MEDIAN_COVERAGE_VARIATION]
     logging.info(f"Using coverage range based on boundary nodes {res}, you can provide a better estimate with --median-unique.")
-    #logging.warning(f"Failed to calculate median unique coverage for tangle. Using coverage based on neighbours {res} but better provide it manually with--median-unique.")
     return res
 
 def identify_tangle_nodes(args, original_graph:nx.DiGraph, node_mapper:NodeIdMapper):
