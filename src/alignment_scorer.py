@@ -14,8 +14,6 @@ class AlignmentScorer:
     #Small malus for diploid tangles and nodes present in only one haplotype with multiplicity > 1
     #R in hap1 and RR in hap2 is better than nothing in hap1 and RRR in hap2
     DEPRIORITIZE_ASSYMETRIC = -1
-    #TODO:
-    #add coefficient to balance path lengths for two-haplotype tangles
     def __init__(self, alignments, original_graph, node_id_mapper):
         
         self.automaton = ahocorasick.Automaton()
@@ -48,12 +46,13 @@ class AlignmentScorer:
         logging.info(f"{len(self.pattern_counts)} different alignment pattern used")
         total_banned_z = 0
         for u, v, data in original_graph.edges(data=True):
-            if data['overlap'] < -1 and (u in used_nodes or v in used_nodes):
+            #Z connection "overlaps" are negative
+            if data['overlap'] < 0 and (u in used_nodes or v in used_nodes):
                 logging.debug(f"banning connection between {u} and {v} because of Z vertice")
                 total_banned_z += 1
                 string_to_ban = self.aln_to_string([u,v])
                 self.pattern_counts[string_to_ban] = self.BANNED_Z_WEIGHT
-                self.automaton.add_word(string_to_ban)
+                self.automaton.add_word(string_to_ban, string_to_ban)
                 #RC added from graph the same way
         logging.info (f"Banning {total_banned_z} Z connections")
         for pattern in self.pattern_counts:
