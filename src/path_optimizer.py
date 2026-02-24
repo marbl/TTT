@@ -374,7 +374,10 @@ class PathOptimizer:
                         overlap = max (0, len(node_sequence) - UNIQUE_BORDER_LENGTH)                
                     else:                
                         overlap = original_graph.get_edge_data(last_node, edge_id)['overlap']
-
+                    if overlap < 0:
+                        logging.warning(f"Negative overlap {overlap} between {self.node_mapper.node_id_to_name_safe(last_node)} and {self.node_mapper.node_id_to_name_safe(edge_id)} !!")                   
+                        logging.warning(f"This is theoretically possible but should not happen in any 'normal' case. Please contact TTT developers. Output sequence is not reliable at all.")
+                        overlap = 0
                     if i == len(self.traversing_path) - 1:                            
                         contig_sequence += node_sequence[overlap:min(len(node_sequence),UNIQUE_BORDER_LENGTH)]
                     else:
