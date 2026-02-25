@@ -28,9 +28,8 @@ class AlignmentScorer:
             for n in alignment: 
                 used_nodes.add(n)
                 used_nodes.add(-n)
-            rc_nodes = [-n for n in alignment]
-            rc_nodes.reverse()
-            rc_pattern_str = self.aln_to_string(rc_nodes)
+            rc_pattern_str = self.aln_to_rc_string(alignment)
+            
             
             #TOTHINK Possibly use lexicographical minimum of pattern and rc_pattern?
 
@@ -54,6 +53,11 @@ class AlignmentScorer:
                 self.pattern_counts[string_to_ban] = self.BANNED_Z_WEIGHT
                 self.automaton.add_word(string_to_ban, string_to_ban)
                 #RC added from graph the same way
+                rc_string_to_ban = self.aln_to_rc_string([u, v])
+                self.pattern_counts[rc_string_to_ban] = self.BANNED_Z_WEIGHT
+                self.automaton.add_word(rc_string_to_ban, rc_string_to_ban)
+                self.rc_patterns[string_to_ban] = rc_string_to_ban
+                self.rc_patterns[rc_string_to_ban] = string_to_ban
         logging.info (f"Banning {total_banned_z} Z connections")
         for pattern in self.pattern_counts:
             logging.debug(f"Pattern: {pattern} Count: {self.pattern_counts[pattern]}")
@@ -66,6 +70,11 @@ class AlignmentScorer:
     
     def aln_to_string(self, aln):
         return "," + ",".join(str(node) for node in aln) + ","
+    
+    def aln_to_rc_string(self, aln):
+        rc_aln = [-n for n in aln]
+        rc_aln.reverse()
+        return self.aln_to_string(rc_aln)
     
     def score_corasick(self, path):
         path_str = self.path_to_string(path)
