@@ -150,7 +150,7 @@ def parse_arguments():
     parser.add_argument("--early-stopping-limit", type=int, default=15000, help="Early stopping limit for optimization (default: 15000).")
     parser.add_argument("--quality-threshold", type=int, default=20, help="Alignments with quality less than this will be filtered out, default 20")
     parser.add_argument("--basename", required=False, default="traversal", type=str, help="Basename for most of the output files, default `traversal`")
-    parser.add_argument("--milp-time-limit", type=int, default=3600, help="Time limit for MILP solver in seconds (default: 3600 seconds = 1 hour).")
+    parser.add_argument("--milp-time-limit", type=int, default=7200, help="Time limit for MILP solver in seconds (default: 7200 seconds = 2 hour).")
     args = parser.parse_args()
     if not args.verkko_output  and (not args.graph  or not args.alignment ):
         #logging not initialized yet
