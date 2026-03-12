@@ -168,49 +168,49 @@ def get_traversable_subgraph(tangle):
         start_vertices.append((0, n))
         end_vertices.append((n, 0))
 
-    logging.info(f"Start and end vertices in the graph {start_vertices}, {end_vertices}")      
-
+    logging.info(f"Start and end vertices in the graph {start_vertices}, {end_vertices}")  
+    s = ""
+    for b in tangle.boundary_nodes:
+        s += f"{tangle.node_id_mapper.node_id_to_name_safe(b)}->{tangle.node_id_mapper.node_id_to_name_safe(tangle.boundary_nodes[b])} "    
+    logging.info(f"Boundary nodes and their connections: {s}")
     border_nodes_count = len(tangle.boundary_nodes)
     # Only 1-1 or 2-2 tangles for now
     log_assert(border_nodes_count == 1 or border_nodes_count == 2, f"Only 1-1 or 2-2 tangles are supported")
     log_assert(len(start_vertices) == border_nodes_count and len(end_vertices) == border_nodes_count, f"Start and end vertices count mismatch: {len(start_vertices)} vs {border_nodes_count} or {len(end_vertices)} vs {border_nodes_count}")
     start_vertices.sort()
     start_vertex = start_vertices[0]
-    start_vertex_node = start_vertex[1]
-    matching_end_vertex_node = tangle.boundary_nodes[start_vertex_node]
-    matching_end_vertex = (matching_end_vertex_node, 0)
+    matching_end_vertices = []
+    for i in range (len(start_vertices)):
+        matching_end_vertex_node = tangle.boundary_nodes[start_vertices[i][1]]
+        matching_end_vertices.append((matching_end_vertex_node, 0))
+
     for e in multi_dual_graph.edges(keys=True):
         logging.debug(f"Edge {e}")
 
-    # If there are 4 border nodes, we need to find the correct end vertex and add the auxiliary connection
-    if border_nodes_count == 2:
-        aux_node_str = "AUX"
-        aux_int_id = tangle.node_id_mapper.parse_node_id(aux_node_str)
-        multi_dual_graph.add_edge(matching_end_vertex, start_vertices[1], original_node=aux_int_id, key=f"{aux_int_id}_0")
-        logging.info(f"Added auxiliary edge from {tangle.node_id_mapper.node_id_to_name_safe(matching_end_vertex_node)} to {tangle.node_id_mapper.node_id_to_name_safe(start_vertices[1][1])}")
-        reachable_verts = nx.descendants(multi_dual_graph, start_vertex)
-        # Add the start_node itself
-        reachable_verts.add(start_vertex)
-
-        # Recreate reachable subgraph after aux edge added
-        reachable_subgraph = multi_dual_graph.subgraph(reachable_verts)
-
+    reachable_vertices = set()
     unreachable_edges = set()
-    for _ in range (100):
-        reachable_verts = nx.descendants(multi_dual_graph, start_vertex)
-        # Add the start_node itself
-        reachable_verts.add(start_vertex)
-        unreachable_verts = set(multi_dual_graph.nodes()) - reachable_verts
+    previous_reachable_count = -1
+    MAX_ITERATIONS = 2000
+    logging.info (f"Total vertices in multi-dual graph before transformation: {len(multi_dual_graph.nodes())}")
+    for _ in range (MAX_ITERATIONS):
+        reachable_vertices.clear()
+        for ind in range (len(start_vertices)):
+            reachable_vertices.update(nx.descendants(multi_dual_graph, start_vertices[ind]))
+            reachable_vertices.add(start_vertices[ind])
+        unreachable_vertices = set(multi_dual_graph.nodes()) - reachable_vertices
         unreachable_edges.clear()
+        unreachable_original_nodes = set()
         for e in multi_dual_graph.edges(keys=True):
-            if e[0] in unreachable_verts:
+            if e[0] in unreachable_vertices:
                 unreachable_edges.add(e)
-                logging.debug(e)
-
+                data = multi_dual_graph.get_edge_data(e[0], e[1], key=e[2])
+                unreachable_original_nodes.add(data['original_node'])
         logging.info(f"Clearing unreachable edges: iteration {_} {len(unreachable_edges)} present")
-        if len(unreachable_edges) == 0:
+        if len(reachable_vertices) == previous_reachable_count or len (unreachable_edges) == 0:
+            logging.info(f"Reachable vertices count stabilized at {len(reachable_vertices)} after iteration {_}")
             break
-        
+        previous_reachable_count = len(reachable_vertices)
+#all unreachable edges are combination of cycles, so we can reverse them
         for e in unreachable_edges:
             logging.debug(f"Reversing edge: {e}")
             data = multi_dual_graph.get_edge_data(e[0], e[1], key=e[2])
@@ -221,20 +221,29 @@ def get_traversable_subgraph(tangle):
             else:
                 new_key = '-' + e[2]
             multi_dual_graph.add_edge(get_canonical_rc_vertex(e[1], tangle.original_graph, tangle.node_id_mapper), get_canonical_rc_vertex(e[0], tangle.original_graph, tangle.node_id_mapper), original_node=-int(data['original_node']), key = new_key)
-
-    logging.debug(f"After transformation")
+            logging.debug(f"Added reversed edge from {get_canonical_rc_vertex(e[1], tangle.original_graph, tangle.node_id_mapper)} to {get_canonical_rc_vertex(e[0], tangle.original_graph, tangle.node_id_mapper)} with original node {-int(data['original_node'])} and key {new_key}")
+    if _ == MAX_ITERATIONS - 1:
+        logging.warning(f"Maximum iterations reached while trying to stabilize reachable vertices. Some traversal will still be found but it is not an expected situation. Please create a github issue to investigate this case.")
+    
+    mults = {}
     for e in multi_dual_graph.edges(keys=True):
-        logging.debug(f"Edge {e}")
+        data = multi_dual_graph.get_edge_data(e[0], e[1], key=e[2])
+        original_node = data['original_node']
+        if not original_node in mults:
+            mults[original_node] = 0
+        mults[original_node] += 1
+    logging.debug ("Final multiplicities after reassigning rc isolated cycles")
+    for n in sorted(mults.keys()):
+        logging.debug(f"Mult for {tangle.node_id_mapper.node_id_to_name_safe(n)} is {mults[n]} ")                   
 
-    #finding unreachable edges again
-    reachable_verts = nx.descendants(multi_dual_graph, start_vertex)
-    # Add the start_node itself
-    reachable_verts.add(start_vertex)
-    unreachable_verts = set(multi_dual_graph.nodes()) - reachable_verts
-    unreachable_edges.clear()
-    for e in multi_dual_graph.edges(keys=True):
-        if e[0] in unreachable_verts:
-            unreachable_edges.add(e)
+    #TODO: possibly be fixed via considering rc loop switch in addition to regular loop rc switch.
+    for i, v in enumerate(matching_end_vertices):
+        descendants = nx.descendants(multi_dual_graph, start_vertices[i])
+        if not v in descendants:            
+            logging.error(f"One of the exit nodes {v} is not reachable from corresponding start vertex {start_vertices[i]}")
+            logging.error(f"It is weird but possible situation for 2-2 tangles that mostly consists of a large inverted repeat, TTT currently cannot handle it properly")
+            logging.error(f"Suggested workaround is to reconsider tangle borders to increase the tangle a bit (add additional diploid bulge to the tangle")
+            exit(1)
 
     if (len(unreachable_edges) != 0):
         logging.warning(f"{len(unreachable_edges)} unreachable edges with nonzero multiplicities remains. They will be ignored in path finding.")
@@ -246,5 +255,11 @@ def get_traversable_subgraph(tangle):
             multi_dual_graph.remove_edge(e[0], e[1], key = e[2])
         logging.warning(out_str)
 
-    reachable_subgraph = multi_dual_graph.subgraph(reachable_verts)
+    if border_nodes_count == 2:
+        aux_node_str = "AUX"
+        aux_int_id = tangle.node_id_mapper.parse_node_id(aux_node_str)
+        multi_dual_graph.add_edge(matching_end_vertices[0], start_vertices[1], original_node=aux_int_id, key=f"{aux_int_id}_0")
+        logging.info(f"Added auxiliary edge from {tangle.node_id_mapper.node_id_to_name_safe(matching_end_vertex_node)} to {tangle.node_id_mapper.node_id_to_name_safe(start_vertices[1][1])}")       
+
+    reachable_subgraph = multi_dual_graph.subgraph(reachable_vertices)
     return reachable_subgraph, start_vertex

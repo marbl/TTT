@@ -125,7 +125,7 @@ def print_final_path_info(best_path, pathOptimizer, tangle, alignment_scorer: Al
         logging.warning(f"TTT was not able to include high-covered tips or some tip-like structures in the path because of the graph structure.")
     else:
         logging.info(
-            f"No missing high-coverage edges in final path, "
+            f"No missing high-coverage edges in the final path, "
             f"threshold={coverage_fraction * tangle.detected_coverage:.2f}"
         )
         
