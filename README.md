@@ -4,9 +4,7 @@ For help run `./TTT.py --help`
 
 Requires python &ge; 3.7 and dataclasses, pulp, ahocorasick, networkx, statistics, and logging python libraries.
 
-<a href="https://docs.google.com/presentation/d/1TLjG0tR3o-Un8pnRawm0XEvTZY1hqpC4o6zhUthawAw/edit?usp=sharing">Slides explaining algorithmic details </a>
-
-UNDER CONSTRUCTION!
+<a href="https://www.biorxiv.org/content/10.64898/2026.03.06.710180v1"> Preprint explaining algorithmic details </a>
 
 ### Example usage:
 ```bash
@@ -88,7 +86,7 @@ Currently TTT does not support tangles with more than 2 traversing paths (i.e. m
 TTT outputs two files to the `<outdir>` &mdash; `traversal.multiplicities.csv` with estimated multiplicities of tangle nodes (can be used with Bandage); `traversal.gaf` with the resulting path and, if graph .gfa file contained node sequences &mdash; `traversal.hpc.fasta` with a patch sequence. However, when combined with verkko (since verkko's graph is based on homopolymer-compressed sequences), this patch is also homopolymer compressed. To get non-hpc sequence you'll need to rerun verkko providing `traversal.gaf` with `--path` option &mdash; see <a href="https://github.com/marbl/verkko?tab=readme-ov-file#consensus-for-user-provided-paths"> verkko's manual </a> for details.
 
 ### Verkko's final graph coverage fix
-In verkko up to (and including ) v2.3 coverage of the short nodes in tangles in final graph (assembly.homopolymer-compressed.gfa) is deeply flawed. Currently suggested way is to run TTT.py on the same tangle in hifi-only graph (`2-processGraph/unitig-unrolled-hifi-resolved.gfa` within verkko output directory). Usually this provides better results and does not require realigning ONT reads to graph.
+In verkko up to (and including ) v2.3.* coverage of the short nodes in tangles in the final graph (assembly.homopolymer-compressed.gfa) is deeply flawed. Currently suggested way is to run TTT.py on the same tangle in hifi-only graph (`2-processGraph/unitig-unrolled-hifi-resolved.gfa` within verkko output directory). Usually this provides better results and does not require realigning ONT reads to graph.
 
 You can find how utig4- nodes match to the utig1- graph in `utig42utig1.gaf` after running `./verkko_coverage_fix/utig4_to_utig1.py <assembly_folder> > utig42utig1.gaf`
 
@@ -98,5 +96,7 @@ Alternatively you can update coverage in final graph running this script
 and then pass `utig4_upt.ont-coverage.csv` as `--coverage` in TTT.
 
 
+### Citation:
+ -  Antipov D, Chen Y, Sollitto M, Phillippy AM, Formenti G, Koren S. [Automatic Generation of Model Sequences for Complex Regions in Assembly Graphs](https://www.biorxiv.org/content/10.64898/2026.03.06.710180v1). biorxiv, 2026 
 
 
