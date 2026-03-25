@@ -83,7 +83,7 @@ class AlignmentScorer:
             pattern = item[1]
             found.add(pattern)
         score = 0
-        for item in found:
+        for item in sorted(found):
             #only looking for one of (pattern, rc_pattern)
             if self.rc_patterns[item] in found:
                 score += self.pattern_counts[item] * self.DEPRIORITIZE_RC_COEFFICIENT
