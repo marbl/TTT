@@ -2,7 +2,7 @@ TTT stands for Trivial Tangle Traverser. This tool generates traversals(model se
 
 For help run `./TTT.py --help`
 
-Requires python &ge; 3.7 and dataclasses, pulp, ahocorasick, networkx, statistics, and logging python libraries.
+Requires python &ge; 3.9 and dataclasses, pulp, ahocorasick, networkx, statistics, and logging python libraries.
 
 <a href="https://www.biorxiv.org/content/10.64898/2026.03.06.710180v1"> Preprint explaining algorithmic details </a>
 
