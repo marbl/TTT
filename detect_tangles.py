@@ -24,10 +24,11 @@ from src.node_id_mapper import NodeIdMapper
 from src.input_parsing import parse_gfa, read_coverage_file, coverage_from_graph, verify_coverage
 
 # Constants
-MIN_BOUNDARY_LENGTH = 50_000       # Minimum node length to qualify as boundary
+MIN_BOUNDARY_LENGTH = 40_000       # Minimum node length to qualify as boundary
 COV_LOW_FACTOR      = 0.5          # Boundary cov >= median * COV_LOW_FACTOR
 COV_HIGH_FACTOR     = 1.5          # Boundary cov <= median * COV_HIGH_FACTOR
 GAP_PATTERN         = re.compile(r'^\[N\d+N:.*\]$')
+SCAFFOLD_GAP_PATTERN = re.compile(r'^\[N\d+N:scaffold\]$')
 
 
 @dataclass
@@ -96,7 +97,12 @@ def tokenize_scaffold_path(path_str):
 
 
 def is_real_gap(token):
-    """Check if token is a [N...N:gap] marker (NOT gapont)."""
+    """Check if token is a [N...N:gap] marker."""
+    return token.is_gap and bool(GAP_PATTERN.match(token.raw))
+
+
+def is_any_gap(token):
+    """Check if token is any [N...N:*] gap marker (including scaffold joins)."""
     return token.is_gap and bool(GAP_PATTERN.match(token.raw))
 
 
@@ -174,6 +180,122 @@ def check_graph_path_exists(left_name, left_orient, right_name, right_orient,
                 queue.append((succ, depth + 1))
 
     return False
+
+
+def find_path_nodes(left_name, left_orient, right_name, right_orient,
+                    graph, node_mapper, max_depth=200):
+    """
+    Find all nodes on the shortest path between boundary nodes using BFS.
+    Returns the set of absolute node IDs on the path (excluding boundaries),
+    or empty set if no path exists.
+    """
+    start_id = oriented_node_id(left_name, left_orient, node_mapper)
+    end_id = oriented_node_id(right_name, right_orient, node_mapper)
+    if start_id is None or end_id is None:
+        return set()
+    if start_id not in graph.nodes or end_id not in graph.nodes:
+        return set()
+
+    visited = {}
+    queue = deque()
+    for succ in graph.successors(start_id):
+        queue.append((succ, 1))
+        visited[succ] = start_id
+
+    while queue:
+        node, depth = queue.popleft()
+        if node == end_id:
+            # Trace back path
+            path_nodes = set()
+            cur = node
+            while cur != start_id:
+                path_nodes.add(abs(cur))
+                cur = visited[cur]
+            path_nodes.discard(abs(start_id))
+            path_nodes.discard(abs(end_id))
+            return path_nodes
+        if depth >= max_depth:
+            continue
+        for succ in graph.successors(node):
+            if succ not in visited:
+                visited[succ] = node
+                queue.append((succ, depth + 1))
+
+    return set()
+
+
+def find_inner_nodes_from_graph(boundary_pairs, seed_inner_names, graph, node_mapper):
+    """
+    Find all graph nodes enclosed between boundary nodes.
+    Remove all boundary nodes from the graph, then find the connected component
+    containing any seed inner node. Returns a set of node names.
+    If boundaries don't isolate a component, falls back to seed_inner_names.
+    """
+    # Collect boundary node IDs
+    boundary_ids = set()
+    for bp in boundary_pairs:
+        for key in ('start', 'end'):
+            name = bp[key]
+            if node_mapper.has_name(name):
+                boundary_ids.add(node_mapper.get_id_for_name(name))
+
+    if not boundary_ids:
+        return seed_inner_names
+
+    # Build undirected graph with positive IDs only
+    indirect = nx.MultiGraph()
+    for node in graph.nodes():
+        if node < 0:
+            continue
+        indirect.add_node(node)
+    for u, v in graph.edges():
+        indirect.add_edge(abs(u), abs(v))
+
+    # Find a seed node: any known inner node present in graph
+    seed_id = None
+    for name in seed_inner_names:
+        if node_mapper.has_name(name):
+            nid = node_mapper.get_id_for_name(name)
+            if nid in indirect:
+                seed_id = nid
+                break
+
+    # If no seed from walk, try BFS path nodes
+    if seed_id is None:
+        for bp in boundary_pairs:
+            path_ids = find_path_nodes(
+                bp['start'], bp['start_orientation'],
+                bp['end'], bp['end_orientation'],
+                graph, node_mapper)
+            for pid in path_ids:
+                if pid in indirect and pid not in boundary_ids:
+                    seed_id = pid
+                    break
+            if seed_id is not None:
+                break
+
+    if seed_id is None:
+        return seed_inner_names
+
+    # Remove boundary nodes
+    for bid in boundary_ids:
+        if bid in indirect:
+            indirect.remove_node(bid)
+
+    if seed_id not in indirect:
+        return seed_inner_names
+
+    # Get connected component
+    component = nx.node_connected_component(indirect, seed_id)
+
+    # Convert to node names (excluding boundaries)
+    result = set()
+    for nid in component:
+        if nid not in boundary_ids:
+            name = node_mapper.node_id_to_name_safe(nid)
+            if name:
+                result.add(name.lstrip('<>'))
+    return result
 
 
 def validate_tangle_boundaries(boundary_pairs, inner_node_names, graph, node_mapper):
@@ -343,18 +465,24 @@ def cluster_gaps_into_tangles(all_gaps, graph, node_mapper):
             parent[a] = b
 
     node_to_gaps = defaultdict(list)
+    # Track which nodes are inner to scaffold-type gaps only 
+    scaffold_gap_inner = set()
     for i, gap in enumerate(all_gaps):
-        all_names = set(gap.inner_node_names)
-        if gap.left_boundary:
-            all_names.add(gap.left_boundary)
-        if gap.right_boundary:
-            all_names.add(gap.right_boundary)
-        for name in all_names:
+        is_scaffold_gap = bool(SCAFFOLD_GAP_PATTERN.match(gap.gap_marker))
+        for name in gap.inner_node_names:
             node_to_gaps[name].append(i)
+            if is_scaffold_gap:
+                scaffold_gap_inner.add(name)
 
     for name, gap_indices in node_to_gaps.items():
         for j in range(1, len(gap_indices)):
-            union(gap_indices[0], gap_indices[j])
+            same_scaffold = (all_gaps[gap_indices[0]].scaffold_name ==
+                             all_gaps[gap_indices[j]].scaffold_name)
+            # For cross-scaffold clustering, skip nodes that are inner to
+            # scaffold-type gaps (they share graph regions coincidentally,
+            # not because they're the same tangle)
+            if same_scaffold or name not in scaffold_gap_inner:
+                union(gap_indices[0], gap_indices[j])
 
     clusters = defaultdict(list)
     for i in range(n):
@@ -412,6 +540,50 @@ def cluster_gaps_into_tangles(all_gaps, graph, node_mapper):
                         'scaffold': g.scaffold_name,
                     })
 
+        # If no complete boundary pairs were found from individual gaps,
+        # try to aggregate boundaries from all gaps in the cluster.
+        # This handles adjacent gaps where the walk gets blocked by neighbors.
+        if not boundary_pairs:
+            # Group gaps by scaffold
+            scaffold_gaps = defaultdict(list)
+            for g in cluster_gaps:
+                scaffold_gaps[g.scaffold_name].append(g)
+
+            for scaffold_name, s_gaps in scaffold_gaps.items():
+                # Collect any left boundary from the first gap that has one
+                # and any right boundary from the last gap that has one
+                left_boundary = None
+                left_orient = ''
+                left_scaffold = ''
+                right_boundary = None
+                right_orient = ''
+                right_scaffold = ''
+                for g in s_gaps:
+                    if g.left_boundary and not left_boundary:
+                        left_boundary = g.left_boundary
+                        left_orient = g.left_orientation
+                        left_scaffold = g.scaffold_name
+                for g in reversed(s_gaps):
+                    if g.right_boundary and not right_boundary:
+                        right_boundary = g.right_boundary
+                        right_orient = g.right_orientation
+                        right_scaffold = g.scaffold_name
+
+                if left_boundary and right_boundary:
+                    pair_key = (left_boundary, right_boundary)
+                    if pair_key not in seen_pairs:
+                        seen_pairs.add(pair_key)
+                        boundary_pairs.append({
+                            'start': left_boundary,
+                            'start_orientation': left_orient,
+                            'end': right_boundary,
+                            'end_orientation': right_orient,
+                            'scaffold': left_scaffold,
+                        })
+                        logging.info(
+                            f"  Tangle cluster: aggregated boundaries from adjacent gaps in {scaffold_name}: "
+                            f"{left_orient}{left_boundary} -> {right_orient}{right_boundary}")
+
         # Validate boundaries separate the tangle from graph
         # (mirrors new_identify_tangle_nodes logic)
         boundaries_do_not_separate = False
@@ -435,11 +607,16 @@ def cluster_gaps_into_tangles(all_gaps, graph, node_mapper):
                     f"No graph path from {bp['start_orientation']}{bp['start']} to "
                     f"{bp['end_orientation']}{bp['end']} "
                     f"(scaffold {bp.get('scaffold', '?')})")
-        # Also flag gaps with no boundaries at all
-        for g in cluster_gaps:
-            if g.left_boundary is None and g.right_boundary is None:
-                has_no_graph_path = True
-                notes.append(f"Both boundaries missing (scaffold {g.scaffold_name})")
+        # Also flag gaps with no boundaries at all (only if tangle has no boundary pairs)
+        if not boundary_pairs:
+            for g in cluster_gaps:
+                if g.left_boundary is None and g.right_boundary is None:
+                    has_no_graph_path = True
+                    notes.append(f"Both boundaries missing (scaffold {g.scaffold_name})")
+
+        # Compute inner nodes from graph (all nodes enclosed between boundaries)
+        if boundary_pairs:
+            inner = find_inner_nodes_from_graph(boundary_pairs, inner, graph, node_mapper)
 
         tangles.append(DetectedTangle(
             tangle_id=tid,
@@ -1147,9 +1324,10 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                         f"No graph path from {bp['start_orientation']}{bp['start']} to "
                         f"{bp['end_orientation']}{bp['end']} "
                         f"(scaffold {bp.get('scaffold', '?')})")
-            for g in t.gaps:
-                if g.left_boundary is None and g.right_boundary is None:
-                    t.has_no_graph_path = True
+            if not t.boundary_pairs:
+                for g in t.gaps:
+                    if g.left_boundary is None and g.right_boundary is None:
+                        t.has_no_graph_path = True
 
     # Step 5: Resolve shared boundaries by walking further in scaffolds
     logging.info("Step 5: Resolving shared boundaries...")
@@ -1158,20 +1336,78 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
             resolve_shared_boundaries(t, all_scaffold_tokens, graph, cov, median_cov, node_mapper)
 
     # Step 6: Collect all scaffolds touching each tangle (gaps + passthroughs)
-    # and flag multichromosomal tangles (>2 scaffolds)
+    # and flag multichromosomal tangles where a real assembled scaffold
+    # passes through the tangle without having a gap there.
+    # Only consider long scaffolds (both gap and passthrough) to avoid
+    # false positives from short scaffolds.
     logging.info("Step 6: Checking for multichromosomal tangles...")
+
+    MIN_SCAFFOLD_LENGTH = 5_000_000  # 5 Mbp: minimum scaffold length for multichromosomal check
+
+    # Compute scaffold lengths (sum of node lengths in the path)
+    scaffold_length = {}
+    for scaffold_name, tokens in all_scaffold_tokens.items():
+        if '_from_' not in scaffold_name:
+            continue
+        total = 0
+        for t_tok in tokens:
+            if not t_tok.is_gap and t_tok.node_name and node_mapper.has_name(t_tok.node_name):
+                nid = node_mapper.get_id_for_name(t_tok.node_name)
+                for sid in (nid, -nid):
+                    if sid in graph.nodes:
+                        total += graph.nodes[sid].get('length', 0)
+                        break
+        scaffold_length[scaffold_name] = total
+
+    # Build node-to-scaffold mapping for multi-scaffold detection
+    # Only track real assembled scaffolds (haplotype*_from_*) that are long enough
+    node_to_scaffolds = defaultdict(set)
+    for scaffold_name, tokens in all_scaffold_tokens.items():
+        if '_from_' not in scaffold_name:
+            continue
+        if scaffold_length.get(scaffold_name, 0) < MIN_SCAFFOLD_LENGTH:
+            continue
+        for t_tok in tokens:
+            if not t_tok.is_gap and t_tok.node_name:
+                node_to_scaffolds[t_tok.node_name].add(scaffold_name)
+
     for t in tangles:
-        t.all_scaffolds = set(g.scaffold_name for g in t.gaps)
+        gap_scaffolds = set(g.scaffold_name for g in t.gaps)
+        t.all_scaffolds = set(gap_scaffolds)
         for bp in t.boundary_pairs:
             t.all_scaffolds.add(bp['scaffold'])
-        if len(t.all_scaffolds) > 2:
+
+        # Skip multichromosomal check if all gap scaffolds are short
+        long_gap_scaffolds = [s for s in gap_scaffolds
+                              if scaffold_length.get(s, 0) >= MIN_SCAFFOLD_LENGTH]
+        if not long_gap_scaffolds:
+            continue
+
+        # Check if graph path between boundaries passes through nodes
+        # belonging to other real scaffolds (not already having a gap here)
+        passthrough_scaffolds = set()
+        for bp in t.boundary_pairs:
+            path_node_ids = find_path_nodes(
+                bp['start'], bp['start_orientation'],
+                bp['end'], bp['end_orientation'],
+                graph, node_mapper)
+            for pnid in path_node_ids:
+                pname = node_mapper.node_id_to_name_safe(pnid)
+                if pname:
+                    bare_name = pname.lstrip('<>')
+                    for scaff in node_to_scaffolds.get(bare_name, set()):
+                        if scaff not in gap_scaffolds:
+                            passthrough_scaffolds.add(scaff)
+
+        t.all_scaffolds.update(passthrough_scaffolds)
+        if passthrough_scaffolds:
             t.is_multichromosomal = True
             t.notes.append(
-                f"Multichromosomal: {len(t.all_scaffolds)} scaffolds traverse this region: "
-                f"{', '.join(sorted(t.all_scaffolds))}")
+                f"Multichromosomal: scaffolds passing through without a gap: "
+                f"{', '.join(sorted(passthrough_scaffolds))}")
             logging.info(
                 f"  Tangle {t.tangle_id}: multichromosomal "
-                f"({len(t.all_scaffolds)} scaffolds)")
+                f"(passthrough: {', '.join(sorted(passthrough_scaffolds))})")
 
     # Step 7: Fix boundary synchronization for 2-haplotype tangles
     # 7a: Detect and fix flipped boundary pairs
@@ -1228,9 +1464,10 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                     f"No graph path from {bp['start_orientation']}{bp['start']} to "
                     f"{bp['end_orientation']}{bp['end']} "
                     f"(scaffold {bp.get('scaffold', '?')})")
-        for g in t.gaps:
-            if g.left_boundary is None and g.right_boundary is None:
-                t.has_no_graph_path = True
+        if not t.boundary_pairs:
+            for g in t.gaps:
+                if g.left_boundary is None and g.right_boundary is None:
+                    t.has_no_graph_path = True
 
     logging.info(f"Final: {len(tangles)} tangles after all processing")
     return tangles
@@ -1403,12 +1640,47 @@ def main():
         print(f"\nTangle {t.tangle_id}: {len(t.gaps)} gap(s), "
               f"{len(t.boundary_pairs)} boundary pair(s), "
               f"{len(t.inner_nodes)} inner nodes{flag_str}")
-        print(f"  Haplotypes: {', '.join(sorted(t.haplotypes))}")
         print(f"  Scaffolds: {', '.join(scaff)}")
         print(f"  Boundaries: {pairs if pairs else 'NO VALID BOUNDARIES'}")
         if t.notes:
             for note in t.notes:
                 print(f"  >> {note}")
+
+    # Classification summary
+    valid_1hap = 0
+    valid_2hap = 0
+    no_path = 0
+    multiscaffold = 0
+    other_invalid = 0
+    for t in tangles:
+        has_boundaries = bool(t.boundary_pairs)
+        is_no_path = t.has_no_graph_path
+        is_multi = t.is_multichromosomal or t.is_multihaplotype
+        is_other_invalid = (t.boundaries_do_not_separate or
+                            t.boundaries_not_synchronized or
+                            t.has_shared_boundary or
+                            not has_boundaries)
+
+        if is_no_path:
+            no_path += 1
+        elif is_multi:
+            multiscaffold += 1
+        elif is_other_invalid:
+            other_invalid += 1
+        elif len(t.haplotypes) <= 1:
+            valid_1hap += 1
+        else:
+            valid_2hap += 1
+
+    print(f"\n{'='*60}")
+    print(f"CLASSIFICATION SUMMARY")
+    print(f"{'='*60}")
+    print(f"  Valid 1-haplotype tangles:  {valid_1hap}")
+    print(f"  Valid 2-haplotype tangles:  {valid_2hap}")
+    print(f"  No path in graph:           {no_path}")
+    print(f"  Multiscaffold (>2):         {multiscaffold}")
+    print(f"  Other invalid:              {other_invalid}")
+    print(f"  Total:                      {len(tangles)}")
 
 
 if __name__ == '__main__':
