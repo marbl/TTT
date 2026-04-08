@@ -396,9 +396,9 @@ def validate_tangle_boundaries(boundary_pairs, inner_node_names, graph, node_map
 
     tangle_component = nx.node_connected_component(indirect_graph, inside_node)
 
-    # Check: the tangle component must be smaller than original
+    # Check: the tangle component must be smaller than or equal to original minus boundaries
     # (all boundaries together must actually isolate the tangle)
-    boundaries_isolate = (len(tangle_component) + len(boundary_node_ids) < len(original_component))
+    boundaries_isolate = (len(tangle_component) + len(boundary_node_ids) <= len(original_component))
     is_valid = True
     if not boundaries_isolate:
         notes.append("Boundaries do not isolate tangle from the rest of the connected component")
@@ -638,7 +638,6 @@ def cluster_gaps_into_tangles(all_gaps, graph, node_mapper):
         if not boundary_pairs:
             for g in cluster_gaps:
                 if g.left_boundary is None and g.right_boundary is None:
-                    has_no_graph_path = True
                     notes.append(f"Both boundaries missing (scaffold {g.scaffold_name})")
 
         # Compute inner nodes from graph (all nodes enclosed between boundaries)
@@ -1354,7 +1353,7 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
             if not t.boundary_pairs:
                 for g in t.gaps:
                     if g.left_boundary is None and g.right_boundary is None:
-                        t.has_no_graph_path = True
+                        pass  # No boundaries found, but not necessarily no graph path
 
     # Step 5: Resolve shared boundaries by walking further in scaffolds
     logging.info("Step 5: Resolving shared boundaries...")
@@ -1494,7 +1493,7 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
         if not t.boundary_pairs:
             for g in t.gaps:
                 if g.left_boundary is None and g.right_boundary is None:
-                    t.has_no_graph_path = True
+                    pass  # No boundaries found, but not necessarily no graph path
 
     logging.info(f"Final: {len(tangles)} tangles after all processing")
     return tangles
@@ -1663,15 +1662,35 @@ def main():
             flags.append("NO GRAPH PATH")
         if t.has_shared_boundary:
             flags.append("SHARED BOUNDARY")
+        # Check if this tangle is "other invalid"
+        has_boundaries = bool(t.boundary_pairs)
+        is_other_invalid = (not t.has_no_graph_path and
+                            not t.is_multichromosomal and
+                            not t.is_multihaplotype and
+                            (t.boundaries_do_not_separate or
+                             t.boundaries_not_synchronized or
+                             t.has_shared_boundary or
+                             not has_boundaries))
+        if is_other_invalid:
+            flags.append("OTHER INVALID")
+        is_invalid = (t.has_no_graph_path or t.is_multichromosomal or
+                      t.is_multihaplotype or is_other_invalid)
         flag_str = f" [{', '.join(flags)}]" if flags else ""
         print(f"\nTangle {t.tangle_id}: {len(t.gaps)} gap(s), "
               f"{len(t.boundary_pairs)} boundary pair(s), "
               f"{len(t.inner_nodes)} inner nodes{flag_str}")
         print(f"  Scaffolds: {', '.join(scaff)}")
-        print(f"  Boundaries: {pairs if pairs else 'NO VALID BOUNDARIES'}")
-        if t.notes:
+        if is_invalid:
+            # For invalid tangles: show only key notes (multichromosomal info),
+            # skip boundaries and detailed validation notes
             for note in t.notes:
-                print(f"  >> {note}")
+                if note.startswith("Multichromosomal:"):
+                    print(f"  >> {note}")
+        else:
+            print(f"  Boundaries: {pairs if pairs else 'NO VALID BOUNDARIES'}")
+            if t.notes:
+                for note in t.notes:
+                    print(f"  >> {note}")
 
     # Classification summary
     valid_1hap = 0
