@@ -251,6 +251,13 @@ def find_inner_nodes_from_graph(boundary_pairs, seed_inner_names, graph, node_ma
     for u, v in graph.edges():
         indirect.add_edge(abs(u), abs(v))
 
+    # Collect neighbors of boundary nodes before removing them
+    boundary_neighbors = set()
+    for bid in boundary_ids:
+        if bid in indirect:
+            boundary_neighbors.update(indirect.neighbors(bid))
+    boundary_neighbors -= boundary_ids
+
     # Find a seed node: any known inner node present in graph
     seed_id = None
     for name in seed_inner_names:
@@ -274,13 +281,33 @@ def find_inner_nodes_from_graph(boundary_pairs, seed_inner_names, graph, node_ma
             if seed_id is not None:
                 break
 
-    if seed_id is None:
-        return seed_inner_names
-
     # Remove boundary nodes
     for bid in boundary_ids:
         if bid in indirect:
             indirect.remove_node(bid)
+
+    # If still no seed, look for boundary neighbors that became isolated
+    # (small components split off by removing boundaries)
+    if seed_id is None and boundary_neighbors:
+        # Find the smallest component among boundary neighbors
+        # (the tangle interior, not the rest of the graph)
+        seen = set()
+        best_component = None
+        for nbr in boundary_neighbors:
+            if nbr in seen or nbr not in indirect:
+                continue
+            comp = nx.node_connected_component(indirect, nbr)
+            seen.update(comp)
+            if best_component is None or len(comp) < len(best_component):
+                best_component = comp
+        if best_component is not None:
+            result = set()
+            for nid in best_component:
+                name = node_mapper.node_id_to_name_safe(nid)
+                if name:
+                    result.add(name.lstrip('<>'))
+            return result
+        return seed_inner_names
 
     if seed_id not in indirect:
         return seed_inner_names
