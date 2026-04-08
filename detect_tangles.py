@@ -45,6 +45,7 @@ class GapInfo:
     """One gap found in a single scaffold line."""
     scaffold_name: str
     gap_marker: str
+    gap_index: int = 0
     left_boundary: Optional[str] = None
     right_boundary: Optional[str] = None
     left_orientation: str = ''
@@ -455,8 +456,8 @@ def detect_gaps_in_scaffold(scaffold_name, path_str, graph, cov, median_cov, nod
         return []
 
     gaps = []
-    for gi in gap_indices:
-        gap = GapInfo(scaffold_name=scaffold_name, gap_marker=tokens[gi].raw)
+    for gap_num, gi in enumerate(gap_indices, start=1):
+        gap = GapInfo(scaffold_name=scaffold_name, gap_marker=tokens[gi].raw, gap_index=gap_num)
 
         left_name, left_orient, left_inner = walk_for_boundary(
             tokens, gi, -1, graph, cov, median_cov, node_mapper)
@@ -1647,7 +1648,6 @@ def main():
     print(f"SUMMARY: {len(tangles)} tangles detected")
     print(f"{'='*60}")
     for t in tangles:
-        scaff = sorted(t.all_scaffolds)
         pairs = "; ".join(
             f"{bp['start_orientation']}{bp['start']} -> {bp['end_orientation']}{bp['end']}"
             for bp in t.boundary_pairs)
@@ -1679,7 +1679,8 @@ def main():
         print(f"\nTangle {t.tangle_id}: {len(t.gaps)} gap(s), "
               f"{len(t.boundary_pairs)} boundary pair(s), "
               f"{len(t.inner_nodes)} inner nodes{flag_str}")
-        print(f"  Scaffolds: {', '.join(scaff)}")
+        gap_labels = sorted(f"{g.scaffold_name}_gap_{g.gap_index}" for g in t.gaps)
+        print(f"  Gaps: {', '.join(gap_labels)}")
         if is_invalid:
             # For invalid tangles: show only key notes (multichromosomal info),
             # skip boundaries and detailed validation notes
@@ -1719,7 +1720,7 @@ def main():
             valid_2hap += 1
 
     print(f"\n{'='*60}")
-    print(f"CLASSIFICATION SUMMARY")
+    print(f"TANGLE CLASSIFICATION SUMMARY")
     print(f"{'='*60}")
     print(f"  Valid 1-haplotype tangles:  {valid_1hap}")
     print(f"  Valid 2-haplotype tangles:  {valid_2hap}")
@@ -1727,6 +1728,45 @@ def main():
     print(f"  Multiscaffold (>2):         {multiscaffold}")
     print(f"  Other invalid:              {other_invalid}")
     print(f"  Total:                      {len(tangles)}")
+
+    # Gap classification summary
+    gap_valid_1hap = 0
+    gap_valid_2hap = 0
+    gap_no_path = 0
+    gap_multiscaffold = 0
+    gap_other_invalid = 0
+    total_gaps = 0
+    for t in tangles:
+        n_gaps = len(t.gaps)
+        total_gaps += n_gaps
+        has_boundaries = bool(t.boundary_pairs)
+        is_no_path = t.has_no_graph_path
+        is_multi = t.is_multichromosomal or t.is_multihaplotype
+        is_other_invalid_t = (t.boundaries_do_not_separate or
+                              t.boundaries_not_synchronized or
+                              t.has_shared_boundary or
+                              not has_boundaries)
+
+        if is_no_path:
+            gap_no_path += n_gaps
+        elif is_multi:
+            gap_multiscaffold += n_gaps
+        elif is_other_invalid_t:
+            gap_other_invalid += n_gaps
+        elif len(t.haplotypes) <= 1:
+            gap_valid_1hap += n_gaps
+        else:
+            gap_valid_2hap += n_gaps
+
+    print(f"\n{'='*60}")
+    print(f"GAP CLASSIFICATION SUMMARY")
+    print(f"{'='*60}")
+    print(f"  Valid (1-haplotype tangle): {gap_valid_1hap}")
+    print(f"  Valid (2-haplotype tangle): {gap_valid_2hap}")
+    print(f"  No path in graph:           {gap_no_path}")
+    print(f"  Multiscaffold (>2):         {gap_multiscaffold}")
+    print(f"  Other invalid:              {gap_other_invalid}")
+    print(f"  Total:                      {total_gaps}")
 
 
 if __name__ == '__main__':
