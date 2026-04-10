@@ -103,10 +103,10 @@ echo "AGGREGATE SUMMARY"
 echo "========================================"
 
 SUMMARY_FILE="$OUTDIR_BASE/summary.tsv"
-echo -e "sample\ttangles\tvalid_1hap\tvalid_2hap\tno_path\tmultiscaffold\tother_invalid\tgaps_total\tgaps_valid_1hap\tgaps_valid_2hap\tgaps_no_path\tgaps_multiscaffold\tgaps_other_invalid" > "$SUMMARY_FILE"
+echo -e "sample\tgaps_total\tgaps_valid_1hap\tgaps_valid_2hap\tgaps_no_path\tgaps_multiscaffold\tgaps_other_invalid" > "$SUMMARY_FILE"
 
 total_samples=0
-total_tangles=0
+total_gaps=0
 total_valid1=0
 total_valid2=0
 total_nopath=0
@@ -119,15 +119,7 @@ for sample in "${VALID_SAMPLES[@]}"; do
         continue
     fi
 
-    # Parse tangle classification from stdout
-    tangles=$(grep -oP 'SUMMARY: \K\d+' "$stdout" 2>/dev/null || echo 0)
-    v1=$(grep 'Valid 1-haplotype tangles:' "$stdout" | head -1 | grep -oP '\d+$' || echo 0)
-    v2=$(grep 'Valid 2-haplotype tangles:' "$stdout" | head -1 | grep -oP '\d+$' || echo 0)
-    np=$(grep 'No path in graph:' "$stdout" | head -1 | grep -oP '\d+$' || echo 0)
-    ms=$(grep 'Multiscaffold (>2):' "$stdout" | head -1 | grep -oP '\d+$' || echo 0)
-    oi=$(grep 'Other invalid:' "$stdout" | head -1 | grep -oP '\d+$' || echo 0)
-
-    # Parse gap classification
+    # Parse gap classification from stdout (GAP CLASSIFICATION SUMMARY section)
     gt=$(grep '^  Total:' "$stdout" | tail -1 | grep -oP '\d+$' || echo 0)
     gv1=$(grep 'Valid (1-haplotype tangle):' "$stdout" | grep -oP '\d+$' || echo 0)
     gv2=$(grep 'Valid (2-haplotype tangle):' "$stdout" | grep -oP '\d+$' || echo 0)
@@ -135,21 +127,21 @@ for sample in "${VALID_SAMPLES[@]}"; do
     gms=$(grep 'Multiscaffold (>2):' "$stdout" | tail -1 | grep -oP '\d+$' || echo 0)
     goi=$(grep 'Other invalid:' "$stdout" | tail -1 | grep -oP '\d+$' || echo 0)
 
-    echo -e "$sample\t$tangles\t$v1\t$v2\t$np\t$ms\t$oi\t$gt\t$gv1\t$gv2\t$gnp\t$gms\t$goi" >> "$SUMMARY_FILE"
+    echo -e "$sample\t$gt\t$gv1\t$gv2\t$gnp\t$gms\t$goi" >> "$SUMMARY_FILE"
 
     total_samples=$((total_samples + 1))
-    total_tangles=$((total_tangles + tangles))
-    total_valid1=$((total_valid1 + v1))
-    total_valid2=$((total_valid2 + v2))
-    total_nopath=$((total_nopath + np))
-    total_multi=$((total_multi + ms))
-    total_other=$((total_other + oi))
+    total_gaps=$((total_gaps + gt))
+    total_valid1=$((total_valid1 + gv1))
+    total_valid2=$((total_valid2 + gv2))
+    total_nopath=$((total_nopath + gnp))
+    total_multi=$((total_multi + gms))
+    total_other=$((total_other + goi))
 done
 
 echo "Samples processed:        $total_samples"
-echo "Total tangles:            $total_tangles"
-echo "  Valid 1-haplotype:      $total_valid1"
-echo "  Valid 2-haplotype:      $total_valid2"
+echo "Total gaps:               $total_gaps"
+echo "  Valid (1-hap tangle):   $total_valid1"
+echo "  Valid (2-hap tangle):   $total_valid2"
 echo "  No path in graph:       $total_nopath"
 echo "  Multiscaffold (>2):     $total_multi"
 echo "  Other invalid:          $total_other"
@@ -158,7 +150,7 @@ echo "Per-sample summary: $SUMMARY_FILE"
 
 # Also compute per-sample stats
 echo ""
-echo "Per-sample tangle count distribution:"
+echo "Per-sample gap count distribution:"
 awk -F'\t' 'NR>1 {print $2}' "$SUMMARY_FILE" | sort -n | \
     awk '{a[NR]=$1; s+=$1} END {
         printf "  min=%d  median=%d  mean=%.1f  max=%d  (n=%d)\n",

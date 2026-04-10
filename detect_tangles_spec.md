@@ -60,31 +60,53 @@ This means:
 
 When a boundary node is used by gaps from different haplotypes within the same tangle, walk further outward in each scaffold to find per-haplotype distinct boundaries. The shared node becomes an inner node.
 
+### Step 3b — Merge tangles with overlapping inner nodes
+
+After initial clustering and inner node computation, tangles whose inner node sets overlap are merged. The merged tangle inherits all gaps, boundary pairs, and the union of inner nodes. Inner nodes are recomputed from the graph using the dual graph after each merge. This step repeats until no more overlaps exist.
+
 ### Step 5 — Flag multichromosomal tangles
 
 For each tangle with gaps in long scaffolds (≥ 5 Mbp):
 
-1. Find the graph path between each boundary pair.
-2. Check if any node on that path belongs to a scaffold that doesn't have a gap in this tangle.
-3. If so, that scaffold **passes through** the tangle region → flag as **multichromosomal**.
+1. Check if any **inner node** belongs to a scaffold that doesn't have a gap in this tangle.
+2. If so, that scaffold **passes through** the tangle region.
+3. If the total number of scaffolds (gap + passthrough) exceeds 2, flag as **multichromosomal**.
+
+### Step 5.5 — Add boundaries from passthrough scaffolds
+
+When boundaries don't separate and a passthrough scaffold exists, the second haplotype traverses the tangle without a gap. The script discovers the passthrough scaffold's boundary pair:
+
+1. Find **anchor nodes** on the gap scaffold just outside each boundary (the first node away from the tangle interior).
+2. Locate those same anchor nodes on the passthrough scaffold.
+3. Between the anchors on the passthrough scaffold, scan for boundary-qualifying nodes.
+4. Add the outermost qualifying nodes as a new boundary pair for the passthrough scaffold.
+5. Recompute inner nodes and re-validate with the expanded boundary set.
+
+This converts 1-haplotype tangles with non-separating boundaries into valid 2-haplotype tangles when the second haplotype path exists.
 
 ### Step 6 — Final validation
 
 For each tangle:
 
-1. **Boundary isolation check:** Remove boundary nodes from the undirected graph. Verify that the connected component containing inner nodes is no larger than the original component minus boundaries. This confirms boundaries properly separate the tangle.
+1. **Boundary separation check (dual graph):** Remove boundary *edges* from the nonoriented dual graph. Verify that the inner component is properly disconnected from the rest of the graph.
 2. **Directional separation check:** For each oriented boundary node, verify it doesn't have both predecessors and successors inside the tangle component.
-3. **Graph path re-check:** Confirm path existence between each boundary pair.
+3. **Boundary extension:** If boundaries fail separation, walk further outward in the scaffold to find replacement boundaries. Revert if extension doesn't fix separation.
+4. **Graph path re-check:** Confirm path existence between each boundary pair.
 
-## Inner node computation
+### Step 7 — Merge adjacent invalid tangles
 
-When boundary pairs exist, inner nodes are computed from the graph (not just the scaffold walk):
+When two tangles from the same scaffold share a boundary node and are both individually invalid, merge them using the outer boundaries, which may form a valid tangle. Inner nodes are recomputed via the dual graph after merging.
 
-1. Remove boundary nodes from the undirected graph.
-2. Find the connected component containing a seed inner node (from the walk or from BFS path).
-3. All nodes in that component are inner nodes.
+## Inner node computation (dual graph)
 
-This captures graph nodes not mentioned in any scaffold but enclosed between boundaries.
+When boundary pairs exist, inner nodes are computed using the **dual graph** (not the original undirected graph):
+
+1. Build the dual graph where vertices = junctions (canonical connections between consecutive nodes) and edges = original graph nodes.
+2. Remove dual edges corresponding to boundary nodes.
+3. Find the connected component containing a seed junction vertex (from a known inner node's dual edge, a BFS path node, or a boundary neighbor junction).
+4. All original node IDs from edges within that component are inner nodes.
+
+This correctly handles **node-based GFA graphs** where the tangle interior may be disconnected when boundary nodes are removed from the original graph, but remains connected through shared junctions in the dual graph. The dual graph transformation matches the paper's edge-based formalism applied to Verkko's node-based GFA format.
 
 ## Tangle classification
 
@@ -134,4 +156,4 @@ Detailed processing log written to the output directory.
 
 - Python 3
 - `networkx`
-- Local modules from `src/`: `NodeIdMapper`, `parse_gfa`, `read_coverage_file`, `coverage_from_graph`, `verify_coverage`, `get_nonoriented_graph`
+- Local modules from `src/`: `NodeIdMapper`, `parse_gfa`, `read_coverage_file`, `coverage_from_graph`, `verify_coverage`, `get_nonoriented_graph`, `get_nonoriented_dual_graph`, `create_dual_graph`
