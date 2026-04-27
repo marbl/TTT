@@ -21,7 +21,7 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.node_id_mapper import NodeIdMapper
-from src.input_parsing import parse_gfa, read_coverage_file, coverage_from_graph, verify_coverage, get_nonoriented_graph, get_nonoriented_dual_graph
+from src.input_parsing import parse_gfa, read_coverage_file, coverage_from_graph, verify_coverage, get_nonoriented_dual_graph
 from src.graph_transformation import create_dual_graph
 
 # Constants
@@ -67,15 +67,58 @@ class DetectedTangle:
     has_no_graph_path: bool = False
     has_shared_boundary: bool = False
     boundaries_do_not_separate: bool = False
-    boundaries_not_synchronized: bool = False
     haplotypes: set = field(default_factory=set)
     all_scaffolds: set = field(default_factory=set)
+    passthrough_scaffolds: set = field(default_factory=set)
     notes: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
 # Core utilities
 # ---------------------------------------------------------------------------
+
+def build_boundary_pairs_from_gaps(cluster_gaps):
+    """Build boundary pairs per scaffold from a list of gaps.
+
+    Uses the leftmost boundary of the first gap and rightmost boundary
+    of the last gap per scaffold.  Deduplicates by (start, end) pair.
+    """
+    scaffold_gaps_map = defaultdict(list)
+    for g in cluster_gaps:
+        scaffold_gaps_map[g.scaffold_name].append(g)
+
+    seen = set()
+    boundary_pairs = []
+    for scaffold_name, s_gaps in scaffold_gaps_map.items():
+        left_b = left_o = right_b = right_o = None
+        for g in s_gaps:
+            if g.left_boundary:
+                left_b = g.left_boundary
+                left_o = g.left_orientation
+                break
+        for g in reversed(s_gaps):
+            if g.right_boundary:
+                right_b = g.right_boundary
+                right_o = g.right_orientation
+                break
+        if left_b and right_b:
+            pkey = (left_b, right_b)
+            if pkey not in seen:
+                seen.add(pkey)
+                boundary_pairs.append({
+                    'start': left_b, 'start_orientation': left_o,
+                    'end': right_b, 'end_orientation': right_o,
+                    'scaffold': scaffold_name,
+                })
+    return boundary_pairs
+
+
+def clear_validation_notes(notes):
+    """Remove boundary-validation notes so they can be recomputed."""
+    return [n for n in notes
+            if not n.startswith("Boundaries do not isolate")
+            and "does not separate incoming/outgoing" not in n]
+
 
 def tokenize_scaffold_path(path_str):
     """Parse a scaffold path string into tokens.
@@ -225,14 +268,138 @@ def find_graph_path(left_name, left_orient, right_name, right_orient,
     return False, set()
 
 
-def find_inner_nodes_from_graph(boundary_pairs, seed_inner_names, graph, nonoriented_dual, node_mapper):
+def build_dual_edge_index(nonoriented_dual):
+    """Build index: abs(original_node) -> list of (u, v, key) in the dual graph.
+
+    This allows O(1) lookup of dual edges for a given original node ID,
+    avoiding repeated full scans of all edges.
+    """
+    index = defaultdict(list)
+    for u, v, key, data in nonoriented_dual.edges(keys=True, data=True):
+        nid = abs(data.get('original_node', 0))
+        if nid:
+            index[nid].append((u, v, key))
+    return index
+
+
+def get_tangle_component(boundary_ids, seed_ids, nonoriented_dual, dual_edge_index,
+                         graph=None, node_mapper=None, boundary_pairs=None):
+    """Core dual-graph operation: temporarily remove boundary edges, find the
+    connected component containing a seed node, return the set of inner node
+    IDs in that component.
+
+    Instead of copying the entire dual graph (~1.4s for large graphs), we
+    temporarily remove boundary edges in-place and re-add them afterwards.
+
+    Parameters
+    ----------
+    boundary_ids : set of int
+        Absolute node IDs of boundary nodes (whose dual edges get removed).
+    seed_ids : set of int
+        Absolute node IDs of candidate seed nodes to start component search.
+    nonoriented_dual : nx.MultiGraph
+        The dual graph (modified in-place temporarily, restored on return).
+    dual_edge_index : dict
+        Pre-built index from build_dual_edge_index().
+    graph, node_mapper, boundary_pairs : optional
+        If provided, uses BFS path as fallback seed source.
+
+    Returns
+    -------
+    tangle_node_ids : set of int  (absolute IDs of inner nodes)
+    tangle_vertices : frozenset    (dual graph vertices in the component)
+    removed_edges : list           (for reference; already re-added)
+    """
+    # Temporarily remove boundary edges
+    removed_edges = []
+    for bid in boundary_ids:
+        for u, v, key in dual_edge_index.get(bid, []):
+            if nonoriented_dual.has_edge(u, v, key=key):
+                removed_edges.append((u, v, key, nonoriented_dual.edges[u, v, key]))
+                nonoriented_dual.remove_edge(u, v, key=key)
+
+    try:
+        # Find the largest connected component reachable from any seed node.
+        # With many boundary pairs, removing boundary edges can fragment the
+        # dual graph into many components; seed nodes may land in different
+        # ones.  We want the main tangle body (the largest component).
+        best_component = None
+        seen = set()
+
+        def _check_seeds(cand_ids):
+            nonlocal best_component, seen
+            for nid in cand_ids:
+                if nid in boundary_ids:
+                    continue
+                for u, v, _key in dual_edge_index.get(nid, []):
+                    for vertex in (u, v):
+                        if vertex in seen:
+                            break
+                        if vertex in nonoriented_dual and nonoriented_dual.degree(vertex) > 0:
+                            comp = nx.node_connected_component(nonoriented_dual, vertex)
+                            seen.update(comp)
+                            if best_component is None or len(comp) > len(best_component):
+                                best_component = comp
+                            break
+
+        _check_seeds(seed_ids)
+
+        # Fallback: BFS path nodes
+        if best_component is None and graph is not None and boundary_pairs is not None:
+            for bp in boundary_pairs:
+                _, path_ids = find_graph_path(
+                    bp['start'], bp['start_orientation'],
+                    bp['end'], bp['end_orientation'],
+                    graph, node_mapper)
+                _check_seeds(path_ids - boundary_ids)
+
+        # Fallback: boundary neighbor junctions (smallest component)
+        if best_component is None:
+            boundary_junctions = set()
+            for bid in boundary_ids:
+                for u, v, key in dual_edge_index.get(bid, []):
+                    boundary_junctions.add(u)
+                    boundary_junctions.add(v)
+            smallest = None
+            for j in boundary_junctions:
+                if j in seen or j not in nonoriented_dual or nonoriented_dual.degree(j) == 0:
+                    continue
+                comp = nx.node_connected_component(nonoriented_dual, j)
+                seen.update(comp)
+                if smallest is None or len(comp) < len(smallest):
+                    smallest = comp
+            if smallest is not None:
+                tangle_node_ids = _collect_component_node_ids(
+                    nonoriented_dual, smallest, exclude=set())
+                return tangle_node_ids, frozenset(smallest)
+            return set(), frozenset()
+
+        tangle_node_ids = _collect_component_node_ids(
+            nonoriented_dual, best_component, exclude=boundary_ids)
+        return tangle_node_ids, frozenset(best_component)
+
+    finally:
+        # Always restore removed edges
+        for u, v, key, data in removed_edges:
+            nonoriented_dual.add_edge(u, v, key=key, **data)
+
+
+
+def _collect_component_node_ids(dual_subgraph, component, exclude):
+    """Collect absolute original node IDs from dual edges within a component."""
+    result = set()
+    for u, v, data in dual_subgraph.edges(data=True):
+        if u in component and v in component:
+            nid = abs(data['original_node'])
+            if nid not in exclude:
+                result.add(nid)
+    return result
+
+
+def find_inner_nodes_from_graph(boundary_pairs, seed_inner_names, graph,
+                                nonoriented_dual, node_mapper, dual_edge_index):
     """
     Find all graph nodes enclosed between boundary nodes using the dual graph.
-    In the dual graph, original nodes are edges. We remove edges corresponding
-    to boundary nodes, then find the connected component containing a seed
-    inner node's edge. This correctly handles node-based GFA graphs where the
-    tangle interior may be disconnected in the original graph but connected
-    through shared junctions in the dual graph.
     Returns set of node names.
     """
     boundary_ids = set()
@@ -245,107 +412,31 @@ def find_inner_nodes_from_graph(boundary_pairs, seed_inner_names, graph, nonorie
     if not boundary_ids:
         return seed_inner_names
 
-    # Remove dual edges corresponding to boundary nodes
-    subgraph = nonoriented_dual.copy()
-    edges_to_remove = []
-    for u, v, key, data in subgraph.edges(keys=True, data=True):
-        orig = abs(data.get('original_node', 0))
-        if orig in boundary_ids:
-            edges_to_remove.append((u, v, key))
-    for u, v, key in edges_to_remove:
-        subgraph.remove_edge(u, v, key=key)
-
-    # Find a seed junction vertex from known inner nodes
-    seed_vertex = None
+    seed_ids = set()
     for name in seed_inner_names:
         if node_mapper.has_name(name):
-            nid = node_mapper.get_id_for_name(name)
-            # Find a dual edge for this inner node
-            for u, v, data in nonoriented_dual.edges(data=True):
-                if abs(data.get('original_node', 0)) == nid:
-                    # Use endpoint that's still connected in subgraph
-                    if u in subgraph and subgraph.degree(u) > 0:
-                        seed_vertex = u
-                        break
-                    if v in subgraph and subgraph.degree(v) > 0:
-                        seed_vertex = v
-                        break
-            if seed_vertex is not None:
-                break
+            seed_ids.add(node_mapper.get_id_for_name(name))
 
-    # If no seed from walk, try BFS path nodes (using directed graph)
-    if seed_vertex is None:
-        for bp in boundary_pairs:
-            _, path_ids = find_graph_path(
-                bp['start'], bp['start_orientation'],
-                bp['end'], bp['end_orientation'],
-                graph, node_mapper)
-            for pid in path_ids:
-                if pid in boundary_ids:
-                    continue
-                for u, v, data in nonoriented_dual.edges(data=True):
-                    if abs(data.get('original_node', 0)) == pid:
-                        if u in subgraph and subgraph.degree(u) > 0:
-                            seed_vertex = u
-                            break
-                        if v in subgraph and subgraph.degree(v) > 0:
-                            seed_vertex = v
-                            break
-                if seed_vertex is not None:
-                    break
-            if seed_vertex is not None:
-                break
+    tangle_node_ids, _ = get_tangle_component(
+        boundary_ids, seed_ids, nonoriented_dual, dual_edge_index,
+        graph=graph, node_mapper=node_mapper, boundary_pairs=boundary_pairs)
 
-    # If no seed, try boundary neighbor junctions (smallest component)
-    if seed_vertex is None:
-        # Collect junction vertices adjacent to boundary edges
-        boundary_junctions = set()
-        for u, v, key in edges_to_remove:
-            boundary_junctions.add(u)
-            boundary_junctions.add(v)
-        seen = set()
-        best_component = None
-        for j in boundary_junctions:
-            if j in seen or j not in subgraph or subgraph.degree(j) == 0:
-                continue
-            comp = nx.node_connected_component(subgraph, j)
-            seen.update(comp)
-            if best_component is None or len(comp) < len(best_component):
-                best_component = comp
-        if best_component is not None:
-            result = set()
-            for u, v, data in subgraph.edges(data=True):
-                if u in best_component and v in best_component:
-                    nid = abs(data['original_node'])
-                    name = node_mapper.node_id_to_name_safe(nid)
-                    if name:
-                        result.add(name.lstrip('<>'))
-            return result
+    if not tangle_node_ids:
         return seed_inner_names
 
-    if seed_vertex not in subgraph or subgraph.degree(seed_vertex) == 0:
-        return seed_inner_names
-
-    component = nx.node_connected_component(subgraph, seed_vertex)
     result = set()
-    for u, v, data in subgraph.edges(data=True):
-        if u in component and v in component:
-            nid = abs(data['original_node'])
-            if nid not in boundary_ids:
-                name = node_mapper.node_id_to_name_safe(nid)
-                if name:
-                    result.add(name.lstrip('<>'))
+    for nid in tangle_node_ids:
+        name = node_mapper.node_id_to_name_safe(nid)
+        if name:
+            result.add(name.lstrip('<>'))
     return result
 
 
-def validate_tangle_boundaries(boundary_pairs, inner_node_names, graph, nonoriented_dual, node_mapper):
+def validate_tangle_boundaries(boundary_pairs, inner_node_names, graph,
+                               nonoriented_dual, node_mapper, dual_edge_index):
     """
     Validate that boundary nodes properly separate the tangle from the rest
-    of the graph. Uses the dual graph where boundary nodes are edges:
-    removing boundary edges should disconnect the inner component from the
-    outer component. Also checks that each boundary node separates
-    incoming/outgoing traffic in the directed graph.
-    Returns (is_valid, notes).
+    of the graph using the dual graph. Returns (is_valid, notes).
     """
     notes = []
 
@@ -371,46 +462,14 @@ def validate_tangle_boundaries(boundary_pairs, inner_node_names, graph, nonorien
     if not boundary_node_ids or not inner_node_ids:
         return True, notes
 
-    # Remove dual edges corresponding to boundary nodes
-    subgraph = nonoriented_dual.copy()
-    boundary_edges = []
-    for u, v, key, data in subgraph.edges(keys=True, data=True):
-        orig = abs(data.get('original_node', 0))
-        if orig in boundary_node_ids:
-            boundary_edges.append((u, v, key))
-    for u, v, key in boundary_edges:
-        subgraph.remove_edge(u, v, key=key)
+    tangle_node_ids, _ = get_tangle_component(
+        boundary_node_ids, inner_node_ids, nonoriented_dual, dual_edge_index)
 
-    # Find a seed junction vertex for an inner node
-    seed_vertex = None
-    for nid in inner_node_ids:
-        for u, v, data in nonoriented_dual.edges(data=True):
-            if abs(data.get('original_node', 0)) == nid:
-                if u in subgraph and subgraph.degree(u) > 0:
-                    seed_vertex = u
-                    break
-                if v in subgraph and subgraph.degree(v) > 0:
-                    seed_vertex = v
-                    break
-        if seed_vertex is not None:
-            break
-
-    if seed_vertex is None:
+    if not tangle_node_ids:
         notes.append("No inner nodes found in dual graph")
         return False, notes
 
-    tangle_component = nx.node_connected_component(subgraph, seed_vertex)
-
-    # Collect inner node IDs from tangle component edges
-    tangle_node_ids = set()
-    for u, v, data in subgraph.edges(data=True):
-        if u in tangle_component and v in tangle_component:
-            tangle_node_ids.add(abs(data['original_node']))
-
     is_valid = True
-
-    # Check directional separation: each oriented boundary should have
-    # predecessors and successors on DIFFERENT sides of the boundary.
     for bnid, oriented_ids in boundary_orientations.items():
         for oriented_id in oriented_ids:
             if oriented_id not in graph.nodes:
@@ -452,9 +511,8 @@ def walk_for_boundary(tokens, gap_idx, direction, graph, cov, median_cov, node_m
     return None, '', inner_nodes
 
 
-def detect_gaps_in_scaffold(scaffold_name, path_str, graph, cov, median_cov, node_mapper):
+def detect_gaps_in_scaffold(scaffold_name, tokens, graph, cov, median_cov, node_mapper):
     """Find all gap markers in one scaffold and walk outward for boundaries."""
-    tokens = tokenize_scaffold_path(path_str)
     gap_indices = [i for i, t in enumerate(tokens) if is_real_gap(t)]
     if not gap_indices:
         return []
@@ -479,7 +537,7 @@ def detect_gaps_in_scaffold(scaffold_name, path_str, graph, cov, median_cov, nod
     return gaps
 
 
-def cluster_gaps_into_tangles(all_gaps, graph, nonoriented_graph, nonoriented_dual, node_mapper):
+def cluster_gaps_into_tangles(all_gaps, graph, nonoriented_dual, node_mapper, dual_edge_index):
     """Cluster gaps into tangles using union-find on shared inner nodes."""
     n = len(all_gaps)
     parent = list(range(n))
@@ -573,50 +631,13 @@ def cluster_gaps_into_tangles(all_gaps, graph, nonoriented_graph, nonoriented_du
 
         # Build boundary pairs per scaffold by aggregating: use the leftmost
         # boundary of the first gap and rightmost boundary of the last gap.
-        # For single-gap scaffolds this is equivalent to taking the gap's pair.
-        # For multi-gap scaffolds (merged adjacent gaps) this yields the
-        # correct outer boundaries.
-        seen_pairs = set()
-        boundary_pairs = []
-        scaffold_gaps_map = defaultdict(list)
-        for g in cluster_gaps:
-            scaffold_gaps_map[g.scaffold_name].append(g)
+        boundary_pairs = build_boundary_pairs_from_gaps(cluster_gaps)
 
-        for scaffold_name, s_gaps in scaffold_gaps_map.items():
-            left_boundary = left_orient = right_boundary = right_orient = None
-            for g in s_gaps:
-                if g.left_boundary:
-                    left_boundary = g.left_boundary
-                    left_orient = g.left_orientation
-                    break
-            for g in reversed(s_gaps):
-                if g.right_boundary:
-                    right_boundary = g.right_boundary
-                    right_orient = g.right_orientation
-                    break
-
-            if left_boundary and right_boundary:
-                pair_key = (left_boundary, right_boundary)
-                if pair_key not in seen_pairs:
-                    seen_pairs.add(pair_key)
-                    boundary_pairs.append({
-                        'start': left_boundary,
-                        'start_orientation': left_orient,
-                        'end': right_boundary,
-                        'end_orientation': right_orient,
-                        'scaffold': scaffold_name,
-                    })
-                    if len(s_gaps) > 1:
-                        logging.info(
-                            f"  Tangle cluster: aggregated boundaries from {len(s_gaps)} "
-                            f"gaps in {scaffold_name}: "
-                            f"{left_orient}{left_boundary} -> {right_orient}{right_boundary}")
-
-        # Validate boundaries
+        # Validate boundaries (needed before Step 5.5 passthrough detection)
         boundaries_do_not_separate = False
         if boundary_pairs:
             is_valid, validation_notes = validate_tangle_boundaries(
-                boundary_pairs, inner, graph, nonoriented_dual, node_mapper)
+                boundary_pairs, inner, graph, nonoriented_dual, node_mapper, dual_edge_index)
             if not is_valid:
                 boundaries_do_not_separate = True
             notes.extend(validation_notes)
@@ -642,7 +663,7 @@ def cluster_gaps_into_tangles(all_gaps, graph, nonoriented_graph, nonoriented_du
 
         # Compute inner nodes from graph
         if boundary_pairs:
-            inner = find_inner_nodes_from_graph(boundary_pairs, inner, graph, nonoriented_dual, node_mapper)
+            inner = find_inner_nodes_from_graph(boundary_pairs, inner, graph, nonoriented_dual, node_mapper, dual_edge_index)
 
         tangles.append(DetectedTangle(
             tangle_id=tid,
@@ -771,8 +792,8 @@ def resolve_shared_boundaries(tangle, all_scaffold_tokens, graph, cov, median_co
 # Tangle classification
 # ---------------------------------------------------------------------------
 
-def extend_failing_boundaries(tangle, all_scaffold_tokens, graph, nonoriented_graph, nonoriented_dual,
-                              cov, median_cov, node_mapper, max_rounds=5):
+def extend_failing_boundaries(tangle, all_scaffold_tokens, graph, nonoriented_dual,
+                              cov, median_cov, node_mapper, dual_edge_index, max_rounds=5):
     """
     When boundary nodes fail directional separation, walk further outward
     in the scaffold to find replacement boundaries that properly separate.
@@ -802,37 +823,8 @@ def extend_failing_boundaries(tangle, all_scaffold_tokens, graph, nonoriented_gr
         if not boundary_ids or not inner_ids:
             return
 
-        # Remove boundary edges from dual graph
-        sub_dual = nonoriented_dual.copy()
-        b_edges = []
-        for u, v, key, data in sub_dual.edges(keys=True, data=True):
-            if abs(data.get('original_node', 0)) in boundary_ids:
-                b_edges.append((u, v, key))
-        for u, v, key in b_edges:
-            sub_dual.remove_edge(u, v, key=key)
-
-        # Find seed junction vertex for an inner node
-        seed_vertex = None
-        for nid in inner_ids:
-            for u, v, data in nonoriented_dual.edges(data=True):
-                if abs(data.get('original_node', 0)) == nid:
-                    if u in sub_dual and sub_dual.degree(u) > 0:
-                        seed_vertex = u
-                        break
-                    if v in sub_dual and sub_dual.degree(v) > 0:
-                        seed_vertex = v
-                        break
-            if seed_vertex is not None:
-                break
-        if seed_vertex is None:
-            return
-
-        dual_component = nx.node_connected_component(sub_dual, seed_vertex)
-        # Collect inner node IDs from dual component edges
-        tangle_component = set()
-        for u, v, data in sub_dual.edges(data=True):
-            if u in dual_component and v in dual_component:
-                tangle_component.add(abs(data['original_node']))
+        tangle_component, _ = get_tangle_component(
+            boundary_ids, inner_ids, nonoriented_dual, dual_edge_index)
 
         # Find which (pair_idx, side) fail directional check
         failing = set()
@@ -933,15 +925,13 @@ def extend_failing_boundaries(tangle, all_scaffold_tokens, graph, nonoriented_gr
         # Recompute inner nodes from graph with new boundaries
         tangle.inner_nodes = find_inner_nodes_from_graph(
             tangle.boundary_pairs, tangle.inner_nodes,
-            graph, nonoriented_dual, node_mapper)
+            graph, nonoriented_dual, node_mapper, dual_edge_index)
 
         # Re-validate
-        tangle.notes = [n for n in tangle.notes
-                        if not n.startswith("Boundaries do not isolate")
-                        and "does not separate incoming/outgoing" not in n]
+        tangle.notes = clear_validation_notes(tangle.notes)
         is_valid, validation_notes = validate_tangle_boundaries(
             tangle.boundary_pairs, tangle.inner_nodes,
-            graph, nonoriented_dual, node_mapper)
+            graph, nonoriented_dual, node_mapper, dual_edge_index)
         tangle.boundaries_do_not_separate = not is_valid
         tangle.notes.extend(validation_notes)
 
@@ -959,8 +949,6 @@ def classify_tangle(t):
         flags.append("MULTICHROMOSOMAL")
     if t.is_multihaplotype:
         flags.append("MULTIHAPLOTYPE/UNRESOLVABLE")
-    if t.boundaries_not_synchronized:
-        flags.append("NOT SYNCHRONIZED")
     if t.has_no_graph_path:
         flags.append("NO GRAPH PATH")
     if t.has_shared_boundary:
@@ -971,7 +959,6 @@ def classify_tangle(t):
                         not t.is_multichromosomal and
                         not t.is_multihaplotype and
                         (t.boundaries_do_not_separate or
-                         t.boundaries_not_synchronized or
                          t.has_shared_boundary or
                          not has_boundaries))
     if is_other_invalid:
@@ -1001,18 +988,16 @@ def classify_tangle(t):
 def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_mapper):
     """Full pipeline: parse scaffolds, find gaps, walk boundaries, cluster."""
 
-    nonoriented_graph = get_nonoriented_graph(graph)
-
     # Create dual graph (vertices=junctions, edges=original nodes) for
     # connectivity checks.  In the dual representation boundary nodes become
     # edges; removing them properly disconnects the tangle interior even when
     # the interior is not connected in the original node-based GFA.
     dual_graph = create_dual_graph(graph, node_mapper)
     nonoriented_dual = get_nonoriented_dual_graph(dual_graph, node_mapper)
+    dual_edge_index = build_dual_edge_index(nonoriented_dual)
 
     # Step 1: Parse and tokenize all scaffolds
     all_scaffold_tokens = {}
-    all_scaffold_paths = {}
     with open(scaffold_file, 'r') as f:
         for line in f:
             parts = line.strip().split('\t')
@@ -1023,20 +1008,19 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
             if scaffold_name == 'name':
                 continue
             all_scaffold_tokens[scaffold_name] = tokenize_scaffold_path(path_str)
-            all_scaffold_paths[scaffold_name] = path_str
 
     # Step 2: Detect gaps in each scaffold
     all_gaps = []
-    for scaffold_name, path_str in all_scaffold_paths.items():
+    for scaffold_name, tokens in all_scaffold_tokens.items():
         gaps = detect_gaps_in_scaffold(
-            scaffold_name, path_str, graph, cov, median_cov, node_mapper)
+            scaffold_name, tokens, graph, cov, median_cov, node_mapper)
         all_gaps.extend(gaps)
 
     logging.info(f"Found {len(all_gaps)} gaps across all scaffolds")
-    logging.info(f"Total scaffolds processed: {len(all_scaffold_paths)}")
+    logging.info(f"Total scaffolds processed: {len(all_scaffold_tokens)}")
 
     # Step 3: Cluster gaps into tangles
-    tangles = cluster_gaps_into_tangles(all_gaps, graph, nonoriented_graph, nonoriented_dual, node_mapper)
+    tangles = cluster_gaps_into_tangles(all_gaps, graph, nonoriented_dual, node_mapper, dual_edge_index)
     logging.info(f"Clustered into {len(tangles)} tangles")
 
     # Step 3b: Merge tangles that share a significant fraction of inner nodes.
@@ -1073,38 +1057,12 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                         f"{len(overlap)} shared inner nodes "
                         f"(|ti|={len(ti.inner_nodes)}, |tj|={len(tj.inner_nodes)})")
                     all_cluster_gaps = ti.gaps + tj.gaps
-                    # Build new boundary pairs per scaffold
-                    scaffold_gaps_map = defaultdict(list)
-                    for g in all_cluster_gaps:
-                        scaffold_gaps_map[g.scaffold_name].append(g)
-                    new_boundary_pairs = []
-                    seen_bp = set()
-                    for sn, s_gaps in scaffold_gaps_map.items():
-                        left_b = left_o = right_b = right_o = None
-                        for g in s_gaps:
-                            if g.left_boundary:
-                                left_b = g.left_boundary
-                                left_o = g.left_orientation
-                                break
-                        for g in reversed(s_gaps):
-                            if g.right_boundary:
-                                right_b = g.right_boundary
-                                right_o = g.right_orientation
-                                break
-                        if left_b and right_b:
-                            pkey = (left_b, right_b)
-                            if pkey not in seen_bp:
-                                seen_bp.add(pkey)
-                                new_boundary_pairs.append({
-                                    'start': left_b, 'start_orientation': left_o,
-                                    'end': right_b, 'end_orientation': right_o,
-                                    'scaffold': sn,
-                                })
+                    new_boundary_pairs = build_boundary_pairs_from_gaps(all_cluster_gaps)
                     new_inner = ti.inner_nodes | tj.inner_nodes
                     if new_boundary_pairs:
                         new_inner = find_inner_nodes_from_graph(
                             new_boundary_pairs, new_inner, graph,
-                            nonoriented_dual, node_mapper)
+                            nonoriented_dual, node_mapper, dual_edge_index)
                     new_haplotypes = ti.haplotypes | tj.haplotypes
                     # Re-check properties
                     new_has_no_path = False
@@ -1125,7 +1083,7 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                     if new_boundary_pairs and new_inner:
                         is_valid, v_notes = validate_tangle_boundaries(
                             new_boundary_pairs, new_inner, graph,
-                            nonoriented_dual, node_mapper)
+                            nonoriented_dual, node_mapper, dual_edge_index)
                         bdns = not is_valid
                         new_notes.extend(v_notes)
                     boundary_to_haps = defaultdict(set)
@@ -1252,7 +1210,7 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
         if t.is_multichromosomal:
             continue
         gap_scaffolds = set(g.scaffold_name for g in t.gaps)
-        pt_scaffolds = getattr(t, 'passthrough_scaffolds', set())
+        pt_scaffolds = t.passthrough_scaffolds
         if not pt_scaffolds:
             continue
 
@@ -1382,14 +1340,12 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
             # Recompute inner nodes with expanded boundary set
             t.inner_nodes = find_inner_nodes_from_graph(
                 t.boundary_pairs, seed_inner if seed_inner else t.inner_nodes,
-                graph, nonoriented_dual, node_mapper)
+                graph, nonoriented_dual, node_mapper, dual_edge_index)
             # Re-validate
-            t.notes = [n for n in t.notes
-                       if not n.startswith("Boundaries do not isolate")
-                       and "does not separate incoming/outgoing" not in n]
+            t.notes = clear_validation_notes(t.notes)
             is_valid, validation_notes = validate_tangle_boundaries(
                 t.boundary_pairs, t.inner_nodes,
-                graph, nonoriented_dual, node_mapper)
+                graph, nonoriented_dual, node_mapper, dual_edge_index)
             t.boundaries_do_not_separate = not is_valid
             t.notes.extend(validation_notes)
             if not t.boundaries_do_not_separate:
@@ -1400,12 +1356,10 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
     # Step 6: Final validation
     logging.info("Step 6: Final validation...")
     for t in tangles:
-        t.notes = [n for n in t.notes
-                   if not n.startswith("Boundaries do not isolate")
-                   and "does not separate incoming/outgoing" not in n]
+        t.notes = clear_validation_notes(t.notes)
         if t.boundary_pairs and t.inner_nodes:
             is_valid, validation_notes = validate_tangle_boundaries(
-                t.boundary_pairs, t.inner_nodes, graph, nonoriented_dual, node_mapper)
+                t.boundary_pairs, t.inner_nodes, graph, nonoriented_dual, node_mapper, dual_edge_index)
             t.boundaries_do_not_separate = not is_valid
             t.notes.extend(validation_notes)
         elif not t.boundary_pairs:
@@ -1419,20 +1373,13 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
             saved_inner_nodes = set(t.inner_nodes)
             saved_notes = list(t.notes)
             extend_failing_boundaries(
-                t, all_scaffold_tokens, graph, nonoriented_graph, nonoriented_dual,
-                cov, median_cov, node_mapper)
+                t, all_scaffold_tokens, graph, nonoriented_dual,
+                cov, median_cov, node_mapper, dual_edge_index)
             if t.boundaries_do_not_separate:
                 # Extension failed: revert to original boundaries.
                 t.boundary_pairs = saved_boundary_pairs
                 t.inner_nodes = saved_inner_nodes
                 t.notes = saved_notes
-                # Boundaries that don't separate mean no valid tangle can
-                # be defined (per the formal definition, removing boundary
-                # edges must split the component).  Classify as no_path
-                # unless the tangle is already flagged multichromosomal
-                # (where non-separating boundaries are expected).
-                if not t.is_multichromosomal:
-                    t.has_no_graph_path = True
                 t.notes.append("Boundaries do not separate and extension failed")
 
         # Re-check graph paths (preserve no-path from extension failure)
@@ -1498,36 +1445,11 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                     f"  Merging tangles {ti.tangle_id} and {tj.tangle_id} "
                     f"(shared boundary: {', '.join(shared)}, scaffold {scaffold_name})")
                 all_cluster_gaps = ti.gaps + tj.gaps
-                scaffold_gaps_map = defaultdict(list)
-                for g in all_cluster_gaps:
-                    scaffold_gaps_map[g.scaffold_name].append(g)
-                new_boundary_pairs = []
-                seen_bp = set()
-                for sn, s_gaps in scaffold_gaps_map.items():
-                    left_b = left_o = right_b = right_o = None
-                    for g in s_gaps:
-                        if g.left_boundary:
-                            left_b = g.left_boundary
-                            left_o = g.left_orientation
-                            break
-                    for g in reversed(s_gaps):
-                        if g.right_boundary:
-                            right_b = g.right_boundary
-                            right_o = g.right_orientation
-                            break
-                    if left_b and right_b:
-                        pkey = (left_b, right_b)
-                        if pkey not in seen_bp:
-                            seen_bp.add(pkey)
-                            new_boundary_pairs.append({
-                                'start': left_b, 'start_orientation': left_o,
-                                'end': right_b, 'end_orientation': right_o,
-                                'scaffold': sn,
-                            })
+                new_boundary_pairs = build_boundary_pairs_from_gaps(all_cluster_gaps)
                 new_inner = ti.inner_nodes | tj.inner_nodes | shared
                 if new_boundary_pairs:
                     new_inner = find_inner_nodes_from_graph(
-                        new_boundary_pairs, new_inner, graph, nonoriented_dual, node_mapper)
+                        new_boundary_pairs, new_inner, graph, nonoriented_dual, node_mapper, dual_edge_index)
                 new_haplotypes = ti.haplotypes | tj.haplotypes
                 # Check if merged is valid
                 new_has_no_path = False
@@ -1546,7 +1468,7 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                 bdns = False
                 if new_boundary_pairs and new_inner:
                     is_valid, v_notes = validate_tangle_boundaries(
-                        new_boundary_pairs, new_inner, graph, nonoriented_dual, node_mapper)
+                        new_boundary_pairs, new_inner, graph, nonoriented_dual, node_mapper, dual_edge_index)
                     bdns = not is_valid
                     new_notes.extend(v_notes)
                 new_tangle = DetectedTangle(
@@ -1596,8 +1518,6 @@ def format_tangle_report(tangles, graph, cov, node_mapper):
             lines.append(f"*** MULTICHROMOSOMAL ({len(t.all_scaffolds)} scaffolds) ***")
         if t.is_multihaplotype:
             lines.append(f"*** MULTIHAPLOTYPE ({len(t.haplotypes)} haplotypes) — unresolvable ***")
-        if t.boundaries_not_synchronized:
-            lines.append(f"*** BOUNDARIES NOT SYNCHRONIZED ***")
         if t.has_no_graph_path:
             lines.append(f"*** NO GRAPH PATH through gap ***")
         if t.has_shared_boundary:
@@ -1705,7 +1625,6 @@ def main():
             'has_no_graph_path': t.has_no_graph_path,
             'has_shared_boundary': t.has_shared_boundary,
             'boundaries_do_not_separate': t.boundaries_do_not_separate,
-            'boundaries_not_synchronized': t.boundaries_not_synchronized,
             'notes': t.notes,
             'boundary_pairs': t.boundary_pairs,
             'num_gaps': len(t.gaps),
