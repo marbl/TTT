@@ -62,7 +62,9 @@ When a boundary node is used by gaps from different haplotypes within the same t
 
 ### Step 3b — Merge tangles with overlapping inner nodes
 
-After initial clustering and inner node computation, tangles whose inner node sets overlap are merged. The merged tangle inherits all gaps, boundary pairs, and the union of inner nodes. Inner nodes are recomputed from the graph using the dual graph after each merge. This step repeats until no more overlaps exist.
+After initial clustering and inner node computation, tangles whose inner node sets overlap (≥80% of the larger set) are merged. The merged tangle inherits all gaps, boundary pairs, and the union of inner nodes. Inner nodes are recomputed from the graph using the dual graph after each merge. This step repeats until no more overlaps exist.
+
+**Inflation guard:** When both tangles have >500 inner nodes (`MAX_RELIABLE_INNER`), their inner node sets may be inflated (spanning most of the graph because boundaries don't fully isolate). The merge is rejected if the combined inner node set is ≥50% of the smaller original set, indicating the overlap is an artifact of inflation rather than genuine shared interior. Tangles missed by this guard are recovered later in Step 5b via passthrough scaffold relationships.
 
 ### Step 5 — Flag multichromosomal tangles
 
@@ -72,15 +74,22 @@ For each tangle with gaps in long scaffolds (≥ 5 Mbp):
 2. If so, that scaffold **passes through** the tangle region.
 3. If the total number of scaffolds (gap + passthrough) exceeds 2, flag as **multichromosomal**.
 
+### Step 5b — Merge related multichromosomal tangles
+
+Multichromosomal tangles whose gap scaffolds appear as passthrough scaffolds of each other are connected by a union-find and merged into a single multichromosomal tangle. This recovers merges that Step 3b rejected due to the inflation guard — when separate tangles are actually in the same genomic region but their inflated inner node sets prevented direct merge.
+
 ### Step 5.5 — Add boundaries from passthrough scaffolds
 
 When boundaries don't separate and a passthrough scaffold exists, the second haplotype traverses the tangle without a gap. The script discovers the passthrough scaffold's boundary pair:
 
-1. Find **anchor nodes** on the gap scaffold just outside each boundary (the first node away from the tangle interior).
-2. Locate those same anchor nodes on the passthrough scaffold.
-3. Between the anchors on the passthrough scaffold, scan for boundary-qualifying nodes.
-4. Add the outermost qualifying nodes as a new boundary pair for the passthrough scaffold.
-5. Recompute inner nodes and re-validate with the expanded boundary set.
+1. Walk outward from the gap scaffold's start boundary until finding a node **shared** with the passthrough scaffold (appears in both scaffolds' token lists).
+2. Walk outward from the end boundary similarly to find a second shared anchor.
+3. Locate the shared anchors on the passthrough scaffold.
+4. Between the anchors (inclusive) on the passthrough scaffold, scan for boundary-qualifying nodes.
+5. Add the outermost qualifying nodes as a new boundary pair for the passthrough scaffold.
+6. Recompute inner nodes and re-validate with the expanded boundary set.
+
+The shared-anchor approach handles cases where the immediate flanking nodes of the boundary are haplotype-specific and don't exist on the passthrough scaffold. By walking further outward until a shared node is found, the algorithm reliably locates the corresponding region.
 
 This converts 1-haplotype tangles with non-separating boundaries into valid 2-haplotype tangles when the second haplotype path exists.
 
@@ -126,15 +135,15 @@ Priority: no_path > multiscaffold > other_invalid > valid.
 
 ### `detected_tangles.txt`
 
-Detailed human-readable report. For each tangle: haplotypes, flags, per-gap boundaries with lengths/coverages, inner node lists, boundary pairs.
+Detailed human-readable report. For each tangle: haplotypes, flags, per-gap immediate scaffold neighbors (nodes directly adjacent to the gap in the scaffold path), inner node lists, boundary pairs.
 
 ### `detected_tangles.json`
 
 Machine-readable JSON array. Each entry contains: tangle ID, haplotypes, all flags, boundary pairs, gap labels (`scaffold_gap_N`), scaffold list, inner node list.
 
-### stdout summary
+### Log summary
 
-Per-tangle one-liner with gap count, boundary pairs, inner node count, and flags. Followed by two classification tables:
+Per-tangle one-liner (via `logging.info`) with gap count, boundary pairs, inner node count, and flags. Followed by two classification tables:
 
 - **Tangle classification:** counts by category
 - **Gap classification:** counts by category (a multi-gap tangle contributes multiple gaps to its category)
@@ -151,6 +160,7 @@ Detailed processing log written to the output directory.
 | `COV_LOW_FACTOR` | 0.5 | Lower bound: `median_cov × 0.5` |
 | `COV_HIGH_FACTOR` | 1.5 | Upper bound: `median_cov × 1.5` |
 | `MIN_SCAFFOLD_LENGTH` | 5,000,000 | Minimum scaffold length for multichromosomal detection |
+| `MAX_RELIABLE_INNER` | 500 | Threshold above which inner node sets are considered potentially inflated |
 
 ## Dependencies
 

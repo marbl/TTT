@@ -53,6 +53,10 @@ class GapInfo:
     left_orientation: str = ''
     right_orientation: str = ''
     inner_node_names: list = field(default_factory=list)
+    left_neighbor: Optional[str] = None
+    left_neighbor_orientation: str = ''
+    right_neighbor: Optional[str] = None
+    right_neighbor_orientation: str = ''
 
 
 @dataclass
@@ -574,6 +578,25 @@ def detect_gaps_in_scaffold(scaffold_name, tokens, graph, cov, median_cov, node_
         gap.right_orientation = right_orient
 
         gap.inner_node_names = left_inner + right_inner
+
+        # Record immediate scaffold neighbors of the gap
+        for idx in range(gi - 1, -1, -1):
+            tok = tokens[idx]
+            if tok.is_gap:
+                break
+            if tok.node_name:
+                gap.left_neighbor = tok.node_name
+                gap.left_neighbor_orientation = tok.orientation
+                break
+        for idx in range(gi + 1, len(tokens)):
+            tok = tokens[idx]
+            if tok.is_gap:
+                break
+            if tok.node_name:
+                gap.right_neighbor = tok.node_name
+                gap.right_neighbor_orientation = tok.orientation
+                break
+
         gaps.append(gap)
 
     return gaps
@@ -1137,6 +1160,26 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                             boundary_to_haps[g.right_boundary].add(hap)
                     if any(len(h) > 1 for h in boundary_to_haps.values()):
                         has_shared = True
+                    # When both tangles have large inner node sets their
+                    # graph-computed inner nodes may be inflated (can be
+                    # the whole graph when boundaries don't fully isolate).
+                    # Accept the merge only if the combined boundaries
+                    # produce a substantially smaller inner set, indicating
+                    # that the merged boundaries actually isolate.
+                    # Multichromosomal tangles missed here are merged later
+                    # in Step 5b using passthrough scaffold relationships.
+                    MAX_RELIABLE_INNER = 500
+                    if (len(ti.inner_nodes) > MAX_RELIABLE_INNER and
+                            len(tj.inner_nodes) > MAX_RELIABLE_INNER and
+                            new_inner):
+                        smaller = min(len(ti.inner_nodes), len(tj.inner_nodes))
+                        if len(new_inner) >= smaller * 0.5:
+                            logging.info(
+                                f"  Rejecting merge of {ti.tangle_id} and "
+                                f"{tj.tangle_id}: merged inner {len(new_inner)} "
+                                f"not smaller than originals "
+                                f"({len(ti.inner_nodes)}, {len(tj.inner_nodes)})")
+                            continue
                     tangles[i] = DetectedTangle(
                         tangle_id=ti.tangle_id,
                         gaps=all_cluster_gaps,
@@ -1241,10 +1284,79 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                     f"{', '.join(sorted(passthrough_scaffolds))} "
                     f"(only {len(total_scaffolds)} scaffolds, not multichromosomal)")
 
+    # Step 5b: Merge multichromosomal tangles whose gap scaffolds pass
+    # through each other's regions.  These are separate tangles only because
+    # Step 3b couldn't merge them (inflated inner nodes).
+    logging.info("Step 5b: Merging related multichromosomal tangles...")
+    mc_tangles = {i: t for i, t in enumerate(tangles)
+                  if t is not None and t.is_multichromosomal}
+    if mc_tangles:
+        # Build gap-scaffold -> tangle index
+        gap_scaff_to_idx = {}
+        for idx, t in mc_tangles.items():
+            for g in t.gaps:
+                gap_scaff_to_idx[g.scaffold_name] = idx
+        # Union-find to cluster connected multichromosomal tangles
+        parent = {idx: idx for idx in mc_tangles}
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        def union(a, b):
+            a, b = find(a), find(b)
+            if a != b:
+                parent[b] = a
+        for idx, t in mc_tangles.items():
+            for pt_scaff in t.passthrough_scaffolds:
+                if pt_scaff in gap_scaff_to_idx:
+                    other = gap_scaff_to_idx[pt_scaff]
+                    if other in mc_tangles:
+                        union(idx, other)
+        # Group by root
+        groups = defaultdict(list)
+        for idx in mc_tangles:
+            groups[find(idx)].append(idx)
+        for root, members in groups.items():
+            if len(members) < 2:
+                continue
+            members.sort()
+            keep = members[0]
+            tk = tangles[keep]
+            merge_ids = [tangles[m].tangle_id for m in members[1:]]
+            for m in members[1:]:
+                tm = tangles[m]
+                tk.gaps.extend(tm.gaps)
+                tk.inner_nodes |= tm.inner_nodes
+                tk.haplotypes |= tm.haplotypes
+                tk.all_scaffolds |= tm.all_scaffolds
+                tk.passthrough_scaffolds |= tm.passthrough_scaffolds
+                tk.notes.extend(tm.notes)
+                tangles[m] = None
+            # Rebuild boundary pairs and passthrough for merged tangle
+            tk.boundary_pairs = build_boundary_pairs_from_gaps(tk.gaps)
+            gap_scaffolds = set(g.scaffold_name for g in tk.gaps)
+            tk.passthrough_scaffolds -= gap_scaffolds
+            # Update notes
+            tk.notes = [n for n in tk.notes if 'Multichromosomal' not in n]
+            all_pt = tk.passthrough_scaffolds
+            if all_pt:
+                tk.notes.append(
+                    f"Multichromosomal: scaffolds passing through without a gap: "
+                    f"{', '.join(sorted(all_pt))}")
+            logging.info(
+                f"  Merged multichromosomal tangles {tk.tangle_id} + "
+                f"{merge_ids} -> {len(tk.gaps)} gaps")
+        tangles = [t for t in tangles if t is not None]
+
     # Step 5.5: Add boundaries from passthrough scaffolds
     # When boundaries don't separate and a passthrough scaffold exists, the
     # second haplotype traverses the tangle region without a gap.  Find
     # where it diverges from the gap scaffold's path and add boundary pairs.
+    # Strategy: walk outward from the gap scaffold's boundaries until we find
+    # a node shared with the passthrough scaffold, then locate that shared
+    # node on the passthrough scaffold and scan between anchors for
+    # boundary-qualifying nodes.
     logging.info("Step 5.5: Adding boundaries from passthrough scaffolds...")
     for t in tangles:
         if not t.boundaries_do_not_separate or not t.boundary_pairs:
@@ -1261,6 +1373,8 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
             if pt_scaffold not in all_scaffold_tokens:
                 continue
             pt_tokens = all_scaffold_tokens[pt_scaffold]
+            pt_node_set = {tok.node_name for tok in pt_tokens
+                          if not tok.is_gap and tok.node_name}
 
             for bp in list(t.boundary_pairs):
                 # Only consider boundary pairs from gap scaffolds
@@ -1283,52 +1397,58 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                 if start_idx is None or end_idx is None:
                     continue
 
-                # Find anchor nodes: first token outside each boundary
-                # on the gap scaffold (away from the tangle interior).
-                pre_start = None
-                idx = start_idx - 1 if start_idx < end_idx else start_idx + 1
+                # Walk outward from start boundary on gap scaffold to find
+                # a node shared with the passthrough scaffold.
+                shared_before = None
                 step = -1 if start_idx < end_idx else +1
+                idx = start_idx + step
                 while 0 <= idx < len(gap_tokens):
                     tok = gap_tokens[idx]
                     if tok.is_gap:
                         break
-                    if tok.node_name:
-                        pre_start = tok.node_name
+                    if tok.node_name and tok.node_name in pt_node_set:
+                        shared_before = tok.node_name
                         break
                     idx += step
 
-                post_end = None
-                idx = end_idx + 1 if start_idx < end_idx else end_idx - 1
+                # Walk outward from end boundary on gap scaffold to find
+                # a node shared with the passthrough scaffold.
+                shared_after = None
                 step = +1 if start_idx < end_idx else -1
+                idx = end_idx + step
                 while 0 <= idx < len(gap_tokens):
                     tok = gap_tokens[idx]
                     if tok.is_gap:
                         break
-                    if tok.node_name:
-                        post_end = tok.node_name
+                    if tok.node_name and tok.node_name in pt_node_set:
+                        shared_after = tok.node_name
                         break
                     idx += step
 
-                if not pre_start or not post_end:
+                if not shared_before or not shared_after:
+                    logging.info(
+                        f"  Tangle {t.tangle_id}: no shared anchors between "
+                        f"{scaffold_name} and {pt_scaffold}")
                     continue
 
-                # Locate anchors on passthrough scaffold
-                pt_pre_idx = None
-                pt_post_idx = None
+                # Locate shared anchors on passthrough scaffold
+                pt_before_idx = None
+                pt_after_idx = None
                 for i, tok in enumerate(pt_tokens):
-                    if not tok.is_gap and tok.node_name == pre_start:
-                        pt_pre_idx = i
-                    if not tok.is_gap and tok.node_name == post_end:
-                        pt_post_idx = i
+                    if not tok.is_gap and tok.node_name == shared_before:
+                        pt_before_idx = i
+                    if not tok.is_gap and tok.node_name == shared_after:
+                        pt_after_idx = i
 
-                if pt_pre_idx is None or pt_post_idx is None:
+                if pt_before_idx is None or pt_after_idx is None:
                     continue
 
-                # Scan between anchors for boundary-qualifying nodes
-                lo = min(pt_pre_idx, pt_post_idx)
-                hi = max(pt_pre_idx, pt_post_idx)
+                # Scan between shared anchors (inclusive) for boundary-
+                # qualifying nodes on the passthrough scaffold.
+                lo = min(pt_before_idx, pt_after_idx)
+                hi = max(pt_before_idx, pt_after_idx)
                 candidates = []
-                for i in range(lo + 1, hi):
+                for i in range(lo, hi + 1):
                     tok = pt_tokens[i]
                     if tok.is_gap or not tok.node_name:
                         continue
@@ -1342,19 +1462,18 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                     continue
 
                 # Assign start/end based on direction
-                if pt_pre_idx < pt_post_idx:
+                if pt_before_idx < pt_after_idx:
                     pt_start_name, pt_start_orient = candidates[0]
                     pt_end_name, pt_end_orient = candidates[-1]
                 else:
                     pt_start_name, pt_start_orient = candidates[-1]
                     pt_end_name, pt_end_orient = candidates[0]
 
-                # Skip if these nodes are already boundaries
-                existing = set()
+                # Skip if this exact (start, end) pair already exists
+                existing_pairs = set()
                 for ebp in t.boundary_pairs:
-                    existing.add(ebp['start'])
-                    existing.add(ebp['end'])
-                if pt_start_name in existing and pt_end_name in existing:
+                    existing_pairs.add((ebp['start'], ebp['end']))
+                if (pt_start_name, pt_end_name) in existing_pairs:
                     continue
 
                 new_bp = {
@@ -1647,24 +1766,10 @@ def format_tangle_report(tangles, graph, cov, node_mapper):
 
         lines.append(f"Gaps ({len(t.gaps)}):")
         for g in t.gaps:
-            lines.append(f"  scaffold: {g.scaffold_name}")
-            lines.append(f"    gap_marker: {g.gap_marker}")
-
-            if g.left_boundary:
-                nid = node_mapper.get_id_for_name(g.left_boundary)
-                ln = graph.nodes.get(nid, {}).get('length', '?') if nid else '?'
-                cv = cov.get(nid, '?') if nid else '?'
-                lines.append(f"    left_boundary:  {g.left_orientation}{g.left_boundary}  (len={ln}, cov={cv})")
-            else:
-                lines.append(f"    left_boundary:  NONE")
-
-            if g.right_boundary:
-                nid = node_mapper.get_id_for_name(g.right_boundary)
-                ln = graph.nodes.get(nid, {}).get('length', '?') if nid else '?'
-                cv = cov.get(nid, '?') if nid else '?'
-                lines.append(f"    right_boundary: {g.right_orientation}{g.right_boundary}  (len={ln}, cov={cv})")
-            else:
-                lines.append(f"    right_boundary: NONE")
+            gap_label = f"{g.scaffold_name}_gap_{g.gap_index}"
+            left_nb = f"{g.left_neighbor_orientation}{g.left_neighbor}" if g.left_neighbor else "?"
+            right_nb = f"{g.right_neighbor_orientation}{g.right_neighbor}" if g.right_neighbor else "?"
+            lines.append(f"  {gap_label}  (neighbors: {left_nb} | {right_nb})")
 
             inner_str = ', '.join(g.inner_node_names[:20])
             lines.append(f"    inner_nodes ({len(g.inner_node_names)}): {inner_str}")
@@ -1758,30 +1863,30 @@ def main():
         json.dump(json_data, f, indent=2)
     logging.info(f"JSON written to {json_file}")
 
-    # Print summary to stdout
-    print(f"\n{'='*60}")
-    print(f"SUMMARY: {len(tangles)} tangles detected")
-    print(f"{'='*60}")
+    # Print summary
+    logging.info(f"\n{'='*60}")
+    logging.info(f"SUMMARY: {len(tangles)} tangles detected")
+    logging.info(f"{'='*60}")
     for t in tangles:
         category, flags, is_invalid = classify_tangle(t)
         pairs = "; ".join(
             f"{bp['start_orientation']}{bp['start']} -> {bp['end_orientation']}{bp['end']}"
             for bp in t.boundary_pairs)
         flag_str = f" [{', '.join(flags)}]" if flags else ""
-        print(f"\nTangle {t.tangle_id}: {len(t.gaps)} gap(s), "
+        logging.info(f"\nTangle {t.tangle_id}: {len(t.gaps)} gap(s), "
               f"{len(t.boundary_pairs)} boundary pair(s), "
               f"{len(t.inner_nodes)} inner nodes{flag_str}")
         gap_labels = sorted(f"{g.scaffold_name}_gap_{g.gap_index}" for g in t.gaps)
-        print(f"  Gaps: {', '.join(gap_labels)}")
+        logging.info(f"  Gaps: {', '.join(gap_labels)}")
         if is_invalid:
             for note in t.notes:
                 if note.startswith("Multichromosomal:"):
-                    print(f"  >> {note}")
+                    logging.info(f"  >> {note}")
         else:
-            print(f"  Boundaries: {pairs if pairs else 'NO VALID BOUNDARIES'}")
+            logging.info(f"  Boundaries: {pairs if pairs else 'NO VALID BOUNDARIES'}")
             if t.notes:
                 for note in t.notes:
-                    print(f"  >> {note}")
+                    logging.info(f"  >> {note}")
 
     # Tangle classification summary
     tangle_counts = defaultdict(int)
@@ -1789,15 +1894,15 @@ def main():
         cat, _, _ = classify_tangle(t)
         tangle_counts[cat] += 1
 
-    print(f"\n{'='*60}")
-    print(f"TANGLE CLASSIFICATION SUMMARY")
-    print(f"{'='*60}")
-    print(f"  Valid 1-haplotype tangles:  {tangle_counts['valid_1hap']}")
-    print(f"  Valid 2-haplotype tangles:  {tangle_counts['valid_2hap']}")
-    print(f"  No path in graph:           {tangle_counts['no_path']}")
-    print(f"  Multiscaffold (>2):         {tangle_counts['multiscaffold']}")
-    print(f"  Other invalid:              {tangle_counts['other_invalid']}")
-    print(f"  Total:                      {len(tangles)}")
+    logging.info(f"\n{'='*60}")
+    logging.info(f"TANGLE CLASSIFICATION SUMMARY")
+    logging.info(f"{'='*60}")
+    logging.info(f"  Valid 1-haplotype tangles:  {tangle_counts['valid_1hap']}")
+    logging.info(f"  Valid 2-haplotype tangles:  {tangle_counts['valid_2hap']}")
+    logging.info(f"  No path in graph:           {tangle_counts['no_path']}")
+    logging.info(f"  Multiscaffold (>2):         {tangle_counts['multiscaffold']}")
+    logging.info(f"  Other invalid:              {tangle_counts['other_invalid']}")
+    logging.info(f"  Total:                      {len(tangles)}")
 
     # Gap classification summary
     gap_counts = defaultdict(int)
@@ -1808,15 +1913,15 @@ def main():
         total_gaps += n_gaps
         gap_counts[cat] += n_gaps
 
-    print(f"\n{'='*60}")
-    print(f"GAP CLASSIFICATION SUMMARY")
-    print(f"{'='*60}")
-    print(f"  Valid (1-haplotype tangle): {gap_counts['valid_1hap']}")
-    print(f"  Valid (2-haplotype tangle): {gap_counts['valid_2hap']}")
-    print(f"  No path in graph:           {gap_counts['no_path']}")
-    print(f"  Multiscaffold (>2):         {gap_counts['multiscaffold']}")
-    print(f"  Other invalid:              {gap_counts['other_invalid']}")
-    print(f"  Total:                      {total_gaps}")
+    logging.info(f"\n{'='*60}")
+    logging.info(f"GAP CLASSIFICATION SUMMARY")
+    logging.info(f"{'='*60}")
+    logging.info(f"  Valid (1-haplotype tangle): {gap_counts['valid_1hap']}")
+    logging.info(f"  Valid (2-haplotype tangle): {gap_counts['valid_2hap']}")
+    logging.info(f"  No path in graph:           {gap_counts['no_path']}")
+    logging.info(f"  Multiscaffold (>2):         {gap_counts['multiscaffold']}")
+    logging.info(f"  Other invalid:              {gap_counts['other_invalid']}")
+    logging.info(f"  Total:                      {total_gaps}")
 
 
 if __name__ == '__main__':
