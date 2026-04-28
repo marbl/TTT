@@ -291,6 +291,10 @@ def get_tangle_component(boundary_ids, seed_ids, nonoriented_dual, dual_edge_ind
     Instead of copying the entire dual graph (~1.4s for large graphs), we
     temporarily remove boundary edges in-place and re-add them afterwards.
 
+    Uses shortest paths between boundary pairs (computed on the original graph
+    before edge removal) to identify the correct interior component — the
+    component that contains the path is the tangle interior.
+
     Parameters
     ----------
     boundary_ids : set of int
@@ -302,14 +306,27 @@ def get_tangle_component(boundary_ids, seed_ids, nonoriented_dual, dual_edge_ind
     dual_edge_index : dict
         Pre-built index from build_dual_edge_index().
     graph, node_mapper, boundary_pairs : optional
-        If provided, uses BFS path as fallback seed source.
+        If provided, computes BFS paths to anchor the interior component.
 
     Returns
     -------
     tangle_node_ids : set of int  (absolute IDs of inner nodes)
     tangle_vertices : frozenset    (dual graph vertices in the component)
-    removed_edges : list           (for reference; already re-added)
     """
+    # Compute path-based anchor nodes BEFORE removing edges.  The shortest
+    # path between a boundary pair traverses the tangle interior, so after
+    # edge removal the component containing those path nodes is the correct
+    # interior — even when boundary removal doesn't fully isolate and a
+    # larger exterior component exists.
+    path_ids = set()
+    if graph is not None and boundary_pairs is not None and node_mapper is not None:
+        for bp in boundary_pairs:
+            _, bp_path_ids = find_graph_path(
+                bp['start'], bp['start_orientation'],
+                bp['end'], bp['end_orientation'],
+                graph, node_mapper)
+            path_ids.update(bp_path_ids - boundary_ids)
+
     # Temporarily remove boundary edges
     removed_edges = []
     for bid in boundary_ids:
@@ -319,41 +336,66 @@ def get_tangle_component(boundary_ids, seed_ids, nonoriented_dual, dual_edge_ind
                 nonoriented_dual.remove_edge(u, v, key=key)
 
     try:
-        # Find the largest connected component reachable from any seed node.
-        # With many boundary pairs, removing boundary edges can fragment the
-        # dual graph into many components; seed nodes may land in different
-        # ones.  We want the main tangle body (the largest component).
         best_component = None
         seen = set()
 
-        def _check_seeds(cand_ids):
-            nonlocal best_component, seen
-            for nid in cand_ids:
-                if nid in boundary_ids:
-                    continue
-                for u, v, _key in dual_edge_index.get(nid, []):
-                    for vertex in (u, v):
-                        if vertex in seen:
-                            break
-                        if vertex in nonoriented_dual and nonoriented_dual.degree(vertex) > 0:
-                            comp = nx.node_connected_component(nonoriented_dual, vertex)
-                            seen.update(comp)
-                            if best_component is None or len(comp) > len(best_component):
-                                best_component = comp
-                            break
+        def _find_component(nid):
+            """Find the connected component containing nid's dual vertices."""
+            if nid in boundary_ids:
+                return None
+            for u, v, _key in dual_edge_index.get(nid, []):
+                for vertex in (u, v):
+                    if vertex in seen:
+                        return None
+                    if vertex in nonoriented_dual and nonoriented_dual.degree(vertex) > 0:
+                        comp = nx.node_connected_component(nonoriented_dual, vertex)
+                        seen.update(comp)
+                        return comp
+            return None
 
-        _check_seeds(seed_ids)
+        # Primary: use path nodes to identify the interior component.
+        # The path between boundary start→end goes through the interior,
+        # so its component is the tangle body.
+        if path_ids:
+            for nid in path_ids:
+                comp = _find_component(nid)
+                if comp is not None:
+                    best_component = comp
+                    break
 
-        # Fallback: BFS path nodes
-        if best_component is None and graph is not None and boundary_pairs is not None:
+        # Secondary: use provided seed nodes (from scaffold walking).
+        # Pick the component that overlaps with path nodes if possible,
+        # otherwise pick the smallest (most likely the interior).
+        if best_component is None:
+            candidates = []
+            for nid in seed_ids:
+                comp = _find_component(nid)
+                if comp is not None:
+                    candidates.append(comp)
+            if candidates:
+                if len(candidates) == 1:
+                    best_component = candidates[0]
+                else:
+                    # Multiple components from seeds; pick smallest
+                    # (interior is typically much smaller than exterior)
+                    best_component = min(candidates, key=len)
+
+        # Fallback: BFS path nodes (when graph info wasn't available earlier)
+        if best_component is None and graph is not None and boundary_pairs is not None and not path_ids:
             for bp in boundary_pairs:
-                _, path_ids = find_graph_path(
+                _, bp_path_ids = find_graph_path(
                     bp['start'], bp['start_orientation'],
                     bp['end'], bp['end_orientation'],
                     graph, node_mapper)
-                _check_seeds(path_ids - boundary_ids)
+                for nid in (bp_path_ids - boundary_ids):
+                    comp = _find_component(nid)
+                    if comp is not None:
+                        best_component = comp
+                        break
+                if best_component is not None:
+                    break
 
-        # Fallback: boundary neighbor junctions (smallest component)
+        # Last resort: boundary neighbor junctions (smallest component)
         if best_component is None:
             boundary_junctions = set()
             for bid in boundary_ids:
@@ -1428,7 +1470,13 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                 cat_j, _, is_invalid_j = classify_tangle(tj)
                 if not (is_invalid_i and is_invalid_j):
                     continue
-                # Check if they share a boundary node
+                # Never merge "no path in graph" tangles — their inner
+                # nodes are unreliable so merging would not help.
+                if cat_i == 'no_path' or cat_j == 'no_path':
+                    continue
+                # Check if they share a boundary node or are adjacent
+                # on the scaffold (consecutive gaps with no valid tangle
+                # between them).
                 ti_boundaries = set()
                 for bp in ti.boundary_pairs:
                     ti_boundaries.add(bp['start'])
@@ -1438,12 +1486,18 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                     tj_boundaries.add(bp['start'])
                     tj_boundaries.add(bp['end'])
                 shared = ti_boundaries & tj_boundaries
-                if not shared:
+                # Also consider adjacent if they are consecutive entries
+                # for this scaffold (gap_index ordering ensures this).
+                adjacent = (k + 1 < len(entries) and
+                            entries[k + 1][0] == tj_idx)
+                if not shared and not adjacent:
                     continue
+                reason = (f"shared boundary: {', '.join(shared)}"
+                          if shared else "adjacent on scaffold")
                 # Merge: combine gaps, use outermost boundaries
                 logging.info(
                     f"  Merging tangles {ti.tangle_id} and {tj.tangle_id} "
-                    f"(shared boundary: {', '.join(shared)}, scaffold {scaffold_name})")
+                    f"({reason}, scaffold {scaffold_name})")
                 all_cluster_gaps = ti.gaps + tj.gaps
                 new_boundary_pairs = build_boundary_pairs_from_gaps(all_cluster_gaps)
                 new_inner = ti.inner_nodes | tj.inner_nodes | shared
@@ -1451,7 +1505,18 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                     new_inner = find_inner_nodes_from_graph(
                         new_boundary_pairs, new_inner, graph, nonoriented_dual, node_mapper, dual_edge_index)
                 new_haplotypes = ti.haplotypes | tj.haplotypes
-                # Check if merged is valid
+                # Check shared boundaries in merged gaps
+                has_shared = False
+                boundary_to_haps = defaultdict(set)
+                for g in all_cluster_gaps:
+                    hap = get_haplotype(g.scaffold_name)
+                    if g.left_boundary:
+                        boundary_to_haps[g.left_boundary].add(hap)
+                    if g.right_boundary:
+                        boundary_to_haps[g.right_boundary].add(hap)
+                if any(len(h) > 1 for h in boundary_to_haps.values()):
+                    has_shared = True
+                # Check if merged has graph paths
                 new_has_no_path = False
                 new_notes = []
                 for bp in new_boundary_pairs:
@@ -1477,26 +1542,80 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                     boundary_pairs=new_boundary_pairs,
                     inner_nodes=new_inner,
                     has_no_graph_path=new_has_no_path,
+                    has_shared_boundary=has_shared,
                     boundaries_do_not_separate=bdns,
                     haplotypes=new_haplotypes,
                     all_scaffolds=ti.all_scaffolds | tj.all_scaffolds,
                     notes=new_notes,
                 )
+                # Always accept merge of adjacent invalid tangles sharing
+                # a boundary — after re-running boundary resolution and
+                # extension the merged tangle may become valid.
                 new_cat, _, new_invalid = classify_tangle(new_tangle)
-                if not new_invalid or new_cat != cat_i:
-                    # Merge improves classification: accept
-                    tangles[ti_idx] = new_tangle
-                    tangles[tj_idx] = None
-                    merged = True
-                    logging.info(
-                        f"    Accepted merge: {cat_i}+{cat_j} -> {new_cat}")
-                    break
+                tangles[ti_idx] = new_tangle
+                tangles[tj_idx] = None
+                merged = True
+                logging.info(
+                    f"    Accepted merge: {cat_i}+{cat_j} -> {new_cat}")
+                break
             if merged:
                 break
         if merged:
             tangles = [t for t in tangles if t is not None]
             for i, t in enumerate(tangles):
                 t.tangle_id = i
+
+    # Step 7b: Re-run shared boundary resolution and boundary extension on
+    # tangles that are still invalid after merging.
+    logging.info("Step 7b: Re-validating merged tangles...")
+    for t in tangles:
+        if t.has_shared_boundary:
+            resolve_shared_boundaries(t, all_scaffold_tokens, graph, cov, median_cov, node_mapper)
+            # Re-check: resolve_shared_boundaries may return early when
+            # boundary_pairs no longer share nodes (e.g. after merge
+            # produced new outermost boundaries).  Update the flag.
+            bp_to_haps = defaultdict(set)
+            for bp in t.boundary_pairs:
+                hap = get_haplotype(bp['scaffold'])
+                bp_to_haps[bp['start']].add(hap)
+                bp_to_haps[bp['end']].add(hap)
+            t.has_shared_boundary = any(len(h) > 1 for h in bp_to_haps.values())
+        # Re-validate boundaries
+        t.notes = clear_validation_notes(t.notes)
+        if t.boundary_pairs and t.inner_nodes:
+            is_valid, validation_notes = validate_tangle_boundaries(
+                t.boundary_pairs, t.inner_nodes, graph, nonoriented_dual, node_mapper, dual_edge_index)
+            t.boundaries_do_not_separate = not is_valid
+            t.notes.extend(validation_notes)
+        elif not t.boundary_pairs:
+            t.boundaries_do_not_separate = True
+        # Try boundary extension if still failing
+        if t.boundaries_do_not_separate and t.boundary_pairs:
+            saved_boundary_pairs = [dict(bp) for bp in t.boundary_pairs]
+            saved_inner_nodes = set(t.inner_nodes)
+            saved_notes = list(t.notes)
+            extend_failing_boundaries(
+                t, all_scaffold_tokens, graph, nonoriented_dual,
+                cov, median_cov, node_mapper, dual_edge_index)
+            if t.boundaries_do_not_separate:
+                t.boundary_pairs = saved_boundary_pairs
+                t.inner_nodes = saved_inner_nodes
+                t.notes = saved_notes
+                t.notes.append("Boundaries do not separate and extension failed")
+        # Re-check graph paths
+        if not t.has_no_graph_path:
+            t.notes = [n for n in t.notes if not n.startswith("No graph path")]
+            for bp in t.boundary_pairs:
+                path_exists, _ = find_graph_path(
+                    bp['start'], bp['start_orientation'],
+                    bp['end'], bp['end_orientation'],
+                    graph, node_mapper)
+                if not path_exists:
+                    t.has_no_graph_path = True
+                    t.notes.append(
+                        f"No graph path from {bp['start_orientation']}{bp['start']} to "
+                        f"{bp['end_orientation']}{bp['end']} "
+                        f"(scaffold {bp.get('scaffold', '?')})")
 
     logging.info(f"Final: {len(tangles)} tangles after all processing")
     return tangles
