@@ -1558,6 +1558,97 @@ def detect_tangles_from_scaffolds(scaffold_file, graph, cov, median_cov, node_ma
                         f"{bp['end_orientation']}{bp['end']} "
                         f"(scaffold {bp.get('scaffold', '?')})")
 
+    # Step 6b: Remove disconnected boundary pairs.
+    # After inner-node refinement in Step 6, some boundary pairs from merged
+    # tangles may be completely disconnected from the tangle interior (neither
+    # boundary node has a graph edge to any inner node).  Such pairs are
+    # spurious — they don't actually bound this tangle.
+    logging.info("Step 6b: Removing disconnected boundary pairs...")
+    for t in tangles:
+        if len(t.boundary_pairs) < 2 or not t.inner_nodes:
+            continue
+        inner_ids = set()
+        for name in t.inner_nodes:
+            if node_mapper.has_name(name):
+                inner_ids.add(node_mapper.get_id_for_name(name))
+        if not inner_ids:
+            continue
+        kept = []
+        for bp in t.boundary_pairs:
+            connected = False
+            for key in ('start', 'end'):
+                name = bp[key]
+                if not node_mapper.has_name(name):
+                    continue
+                nid = node_mapper.get_id_for_name(name)
+                for oid in (nid, -nid):
+                    if oid not in graph.nodes:
+                        continue
+                    if any(abs(p) in inner_ids for p in graph.predecessors(oid)):
+                        connected = True
+                    if any(abs(s) in inner_ids for s in graph.successors(oid)):
+                        connected = True
+            if connected:
+                kept.append(bp)
+            else:
+                logging.info(
+                    f"  Tangle {t.tangle_id}: removing disconnected boundary pair "
+                    f"{bp.get('start_orientation','')}{bp['start']} -> "
+                    f"{bp.get('end_orientation','')}{bp['end']} "
+                    f"(scaffold {bp.get('scaffold', '?')})")
+        if len(kept) < len(t.boundary_pairs):
+            t.boundary_pairs = kept
+            # Recompute inner nodes and re-validate with remaining pairs
+            if t.boundary_pairs:
+                t.inner_nodes = find_inner_nodes_from_graph(
+                    t.boundary_pairs, t.inner_nodes, graph,
+                    nonoriented_dual, node_mapper, dual_edge_index)
+                t.notes = clear_validation_notes(t.notes)
+                is_valid, validation_notes = validate_tangle_boundaries(
+                    t.boundary_pairs, t.inner_nodes,
+                    graph, nonoriented_dual, node_mapper, dual_edge_index)
+                t.boundaries_do_not_separate = not is_valid
+                t.notes.extend(validation_notes)
+
+    # Step 6c: Re-validate multichromosomal status.
+    # Step 5 flagged multichromosomal tangles using pre-refinement inner
+    # nodes.  After Step 6 reduced the inner node sets, passthrough
+    # scaffolds may no longer traverse any retained inner nodes.  Recheck
+    # and clear the flag when that happens.
+    logging.info("Step 6c: Re-validating multichromosomal tangles...")
+    for t in tangles:
+        if not t.is_multichromosomal or not t.passthrough_scaffolds:
+            continue
+        gap_scaffolds = set(g.scaffold_name for g in t.gaps)
+        # Recompute passthrough using refined inner nodes
+        new_passthrough = set()
+        for inner_name in t.inner_nodes:
+            for scaff in node_to_scaffolds.get(inner_name, set()):
+                if scaff not in gap_scaffolds:
+                    new_passthrough.add(scaff)
+        removed = t.passthrough_scaffolds - new_passthrough
+        if removed:
+            t.passthrough_scaffolds = new_passthrough
+            t.all_scaffolds = gap_scaffolds | new_passthrough
+            for bp in t.boundary_pairs:
+                t.all_scaffolds.add(bp['scaffold'])
+            total_scaffolds = gap_scaffolds | new_passthrough
+            if len(total_scaffolds) <= 2:
+                t.is_multichromosomal = False
+                t.notes = [n for n in t.notes if 'Multichromosomal' not in n]
+                logging.info(
+                    f"  Tangle {t.tangle_id}: no longer multichromosomal "
+                    f"(removed passthrough: {', '.join(sorted(removed))})")
+            else:
+                # Still multichromosomal but with fewer passthrough scaffolds
+                t.notes = [n for n in t.notes if 'Multichromosomal' not in n]
+                t.notes.append(
+                    f"Multichromosomal: scaffolds passing through without a gap: "
+                    f"{', '.join(sorted(new_passthrough))}")
+                logging.info(
+                    f"  Tangle {t.tangle_id}: still multichromosomal "
+                    f"(updated passthrough: {', '.join(sorted(new_passthrough))})")
+
     # Step 7: Merge adjacent invalid tangles that share a boundary node.
     # When two tangles from the same scaffold share a boundary and are both
     # individually invalid, merge them with outer boundaries which may form
