@@ -95,6 +95,9 @@ Alternatively you can update coverage in final graph running this script
 
 and then pass `utig4_upt.ont-coverage.csv` as `--coverage` in TTT.
 
+### TTT and hifiasm
+TTT's algorithm is not assembler-dependant, and thus it can be run on hifiasm-generated graphs. However, it was never tested and there may be multiple potential issues.
+See discussion here https://github.com/marbl/TTT/issues/3 for more details.
 
 ### Citation:
  -  Antipov D, Chen Y, Sollitto M, Phillippy AM, Formenti G, Koren S. [Automatic Generation of Model Sequences for Complex Regions in Assembly Graphs](https://www.biorxiv.org/content/10.64898/2026.03.06.710180v1). biorxiv, 2026 
