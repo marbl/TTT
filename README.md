@@ -83,7 +83,7 @@ Currently TTT does not support tangles with more than 2 traversing paths (i.e. m
 <br />
 
 ### Output
-TTT outputs two files to the `<outdir>` &mdash; `traversal.multiplicities.csv` with estimated multiplicities of tangle nodes (can be used with Bandage); `traversal.gaf` with the resulting path and, if graph .gfa file contained node sequences &mdash; `traversal.hpc.fasta` with a patch sequence. However, when combined with verkko (since verkko's graph is based on homopolymer-compressed sequences), this patch is also homopolymer compressed. To get non-hpc sequence you'll need to rerun verkko providing `traversal.gaf` with `--path` option &mdash; see <a href="https://github.com/marbl/verkko?tab=readme-ov-file#consensus-for-user-provided-paths"> verkko's manual </a> for details.
+TTT outputs two files to the `<outdir>` &mdash; `traversal.multiplicities.csv` with estimated multiplicities of tangle nodes (can be used with Bandage); `traversal.gaf` with the resulting path in `gaf` format and, if graph .gfa file contained node sequences &mdash; `traversal.hpc.fasta` with a patch sequence. However, when combined with verkko (since verkko's graph is based on homopolymer-compressed sequences), this patch is also homopolymer compressed. To get non-hpc sequence you'll need to rerun verkko providing `traversal.gaf` with `--path` option &mdash; see <a href="https://github.com/marbl/verkko?tab=readme-ov-file#consensus-for-user-provided-paths"> verkko's manual </a> for details. With non-homopolymer compressed graphs (i.e. hifiasm) patch sequence will be not homopolymer-compressed, and can be applied directly to the scaffold.
 
 ### Verkko's final graph coverage fix
 In verkko up to (and including ) v2.3.* coverage of the short nodes in tangles in the final graph (assembly.homopolymer-compressed.gfa) is deeply flawed. Currently suggested way is to run TTT.py on the same tangle in hifi-only graph (`2-processGraph/unitig-unrolled-hifi-resolved.gfa` within verkko output directory). Usually this provides better results and does not require realigning ONT reads to graph.
@@ -96,7 +96,7 @@ Alternatively you can update coverage in final graph running this script
 and then pass `utig4_upt.ont-coverage.csv` as `--coverage` in TTT.
 
 ### TTT and hifiasm
-TTT's algorithm is not assembler-dependant, and thus it can be run on hifiasm-generated graphs. However, it was never tested and there may be multiple potential issues.
+TTT's algorithm is not assembler-dependant, and thus it can be run on hifiasm-generated graphs. However, it was never tested and there may be multiple potential issues. 
 See discussion here https://github.com/marbl/TTT/issues/3 for more details.
 
 ### Citation:
