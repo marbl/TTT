@@ -11,8 +11,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DETECT_SCRIPT="$SCRIPT_DIR/detect_tangles.py"
-ASSEMBLY_BASE="/data/Phillippy2/projects/hprc-assemblies/assemblies-v4"
-OUTDIR_BASE="/data/antipovd2/res/TTT_paper/HPRC_stats"
+#ASSEMBLY_BASE="/data/Phillippy2/projects/hprc-assemblies/assemblies-v4"
+#OUTDIR_BASE="/data/antipovd2/res/TTT_paper/HPRC_stats"
+ASSEMBLY_BASE="/data/Phillippy2/projects/hprc-release3/assemblies-v2/"
+OUTDIR_BASE="/data/antipovd2/res/TTT_paper/HPRC_r3v2_stats"
+
 
 JOBS=1
 FILTER_SAMPLES=""
@@ -77,7 +80,7 @@ run_one() {
         --graph "$graph" \
         --scaffolds "$scaffolds" \
         --outdir "$outdir" \
-        --log-level WARNING \
+        --log-level INFO \
         > "$outdir/stdout.txt" 2> "$outdir/stderr.txt"; then
         echo "OK   $sample"
     else
@@ -114,18 +117,18 @@ total_multi=0
 total_other=0
 
 for sample in "${VALID_SAMPLES[@]}"; do
-    stdout="$OUTDIR_BASE/$sample/stdout.txt"
+    stdout="$OUTDIR_BASE/$sample/detect_tangles.log"
     if [[ ! -f "$stdout" ]]; then
         continue
     fi
 
     # Parse gap classification from stdout (GAP CLASSIFICATION SUMMARY section)
-    gt=$(grep '^  Total:' "$stdout" | tail -1 | grep -oP '\d+$' || echo 0)
-    gv1=$(grep 'Valid (1-haplotype tangle):' "$stdout" | grep -oP '\d+$' || echo 0)
-    gv2=$(grep 'Valid (2-haplotype tangle):' "$stdout" | grep -oP '\d+$' || echo 0)
-    gnp=$(grep 'No path in graph:' "$stdout" | tail -1 | grep -oP '\d+$' || echo 0)
-    gms=$(grep 'Multiscaffold (>2):' "$stdout" | tail -1 | grep -oP '\d+$' || echo 0)
-    goi=$(grep 'Other invalid:' "$stdout" | tail -1 | grep -oP '\d+$' || echo 0)
+    gt=$(grep -A 10 "GAP CLASSIFICATION SUMMARY" "$stdout" | grep '^  Total:' | tail -1 | grep -oP '\d+$' || echo 0)
+    gv1=$(grep -A 10 "GAP CLASSIFICATION SUMMARY" "$stdout" | grep 'Valid (1-haplotype tangle):' | grep -oP '\d+$' || echo 0)
+    gv2=$(grep -A 10 "GAP CLASSIFICATION SUMMARY" "$stdout" | grep 'Valid (2-haplotype tangle):' | grep -oP '\d+$' || echo 0)
+    gnp=$(grep -A 10 "GAP CLASSIFICATION SUMMARY" "$stdout" | grep 'No path in graph:' | grep -oP '\d+$' || echo 0)
+    gms=$(grep -A 10 "GAP CLASSIFICATION SUMMARY" "$stdout" | grep 'Multiscaffold (>2):' | grep -oP '\d+$' || echo 0)
+    goi=$(grep -A 10 "GAP CLASSIFICATION SUMMARY" "$stdout" | grep 'Other invalid:' | grep -oP '\d+$' || echo 0)
 
     echo -e "$sample\t$gt\t$gv1\t$gv2\t$gnp\t$gms\t$goi" >> "$SUMMARY_FILE"
 
